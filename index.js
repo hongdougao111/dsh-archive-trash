@@ -320,10 +320,52 @@ async function moveToTrash(ctx, sessionIds) {
   return { moved, failed, truncated: sessionIds.length > ids.length }
 }
 
+/**
+ * 还原之后，让会话重新出现在前端列表里。
+ *
+ * 与删除对称：删除时补发 `api-session/removed`，还原时就得补发
+ * `api-session/added`，否则前端内存里的列表里没有这行 —— 同样是
+ * 「还原了但侧边栏看不到，必须重启」。
+ *
+ * `added` 的载荷是一个 summary（见 Host 的 ApiSessionList.summaryFor）：
+ *   { sessionId, updatedAt, agentAvailable, formatStatus, running, blank,
+ *     cwd?, parentSessionId?, origin?, projections? }
+ * 还原回来的会话必然是冷会话，所以 running=false、agentAvailable=false，
+ * 那两个 optional 字段按 header 补上就行。
+ *
+ * @param {Map<string, object>} headers sessionId → SessionHeader
+ */
+async function announceRestored(ctx, headers) {
+  if (headers.size === 0) return
+  for (const [id, header] of headers) {
+    const summary = {
+      sessionId: id,
+      updatedAt: Number(header?.createdAt) || Date.now(),
+      agentAvailable: false,
+      formatStatus: 'current',
+      running: false,
+      blank: false,
+      ...(header?.parentSession === undefined ? {} : { parentSessionId: header.parentSession }),
+      ...(header?.origin === undefined ? {} : { origin: header.origin }),
+      ...(header?.cwd === undefined ? {} : { cwd: header.cwd }),
+    }
+    try {
+      ctx.emit('api-session/added', summary)
+    } catch {}
+  }
+  // 再拉一次基线兜底：确保 projections / updatedAt 跟真实磁盘状态对齐
+  try {
+    const sessions = ctx.get('sessions')
+    if (sessions && typeof sessions.refresh === 'function') await sessions.refresh()
+  } catch {}
+}
+
 /** 从回收站还原。 */
 async function restoreFromTrash(ctx, entryIds) {
   const restored = []
   const failed = []
+  /** sessionId → header，供还原后补发 added 用 */
+  const restoredHeaders = new Map()
   for (const entryId of entryIds.map(String)) {
     const entryDir = path.join(TRASH_ROOT, entryId)
     const payload = path.join(entryDir, 'payload')
@@ -341,11 +383,20 @@ async function restoreFromTrash(ctx, entryIds) {
       await fs.mkdir(path.dirname(originalPath), { recursive: true })
       await fs.rename(payload, originalPath)
       await fs.rm(entryDir, { recursive: true, force: true })
-      restored.push({ entryId, sessionId: meta.sessionId ?? '' })
+      const sessionId = String(meta.sessionId ?? '')
+      restored.push({ entryId, sessionId })
+      if (sessionId) {
+        restoredHeaders.set(sessionId, {
+          id: sessionId,
+          cwd: meta.cwd || undefined,
+          createdAt: meta.deletedAt || Date.now(),
+        })
+      }
     } catch (error) {
       failed.push({ entryId, reason: String(error?.message ?? error) })
     }
   }
+  if (restoredHeaders.size > 0) await announceRestored(ctx, restoredHeaders)
   return { restored, failed }
 }
 

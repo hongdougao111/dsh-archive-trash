@@ -74,6 +74,8 @@ const query = {
 }
 
 let handler = null
+/** 记录插件 emit 了哪些 Host 事件（关键：api-session/removed） */
+const emitted = []
 const ctx = {
   get(name) {
     if (name === 'workspaceRegistry') return registry
@@ -87,6 +89,9 @@ const ctx = {
   logger: { warn: () => {} },
   effect: (fn) => fn(),
   on: () => () => {},
+  emit(event, ...args) {
+    emitted.push([event, ...args])
+  },
 }
 
 const mod = await import(pathToFileURL(path.resolve('./index.js')).href)
@@ -161,6 +166,10 @@ console.log('4) delete —— 移入回收站')
   check('归档集合已摘除', !archived.has(S1), [...archived])
   // ⚠️ 故意不 detach：detach 会让前端把该会话当 stray，多出一个「未分组」分组。
   check('workspace 归属保持不变（避免未分组幽灵）', !detached.includes(S1), detached)
+  // 关键：必须 emit api-session/removed，前端才会立刻把这一行从列表里拿掉，
+  // 否则「删了还显示、必须重启」。
+  const removed = emitted.filter((e) => e[0] === 'api-session/removed').map((e) => e[1])
+  check('emit 了 api-session/removed', removed.includes(S1), removed)
   const trashDirs = await fs.readdir(path.join(TMP, '.trash', 'sessions'))
   check('回收站里有 1 个条目', trashDirs.length === 1, trashDirs)
   const entry = path.join(TMP, '.trash', 'sessions', trashDirs[0])
@@ -189,6 +198,11 @@ console.log('6) restore —— 还原')
   const back = await fs.stat(dir1).catch(() => null)
   check('会话目录回到原位', back?.isDirectory() === true)
   check('回收站已空', (await fs.readdir(path.join(TMP, '.trash', 'sessions'))).length === 0)
+  // 与删除对称：还原后必须补发 api-session/added，否则前端列表里看不到
+  const added = emitted.filter((e) => e[0] === 'api-session/added').map((e) => e[1])
+  const hit = added.find((s) => s && s.sessionId === S1)
+  check('emit 了 api-session/added', hit !== undefined, added.map((s) => s?.sessionId))
+  check('summary 带 sessionId/running=false', hit?.running === false && hit?.sessionId === S1, hit)
 }
 
 console.log('7) restore —— 目标已存在时拒绝覆盖')

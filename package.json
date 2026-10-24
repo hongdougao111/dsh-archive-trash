@@ -29,7 +29,8 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG-0.3.2.md"
   ],
   "dsh": {
     "bundle": {

@@ -180,24 +180,24 @@ async function listArchived(ctx) {
 }
 
 /**
- * 从归档集合里摘掉这些 id。
+ * 让这批会话从「已归档集合」和「前端列表」里同时消失。
  *
- * ⚠️ 这里**故意不调用 `workspace.detachSession()`**。
+ * 关键动作是 **emit `api-session/removed`** —— 这是 DSH 自己的移除通道：
  *
- * 前端 `groupByWorkspace` 的算法是：先按各 workspace 的 `sessionIds` 记账，
- * 凡是「在会话列表里、但没被任何 workspace 记账」的会话都会落进 stray，
- * 于是多出一个「未分组」分组（见 dsh-client-ui-workspace 的 groupByWorkspace）。
+ *   Host  session/disposed  →  ctx.emit('api-session/removed', id)
+ *   Client 远端事件转发      →  sessions.handleSessionRemoved(id)
+ *                           →  recordMutation({ kind: 'remove', sessionId })
+ *                           →  列表里删掉这一行
  *
- * 而 `detachSession` 正是把 id 从记账里摘掉 —— 但此刻前端内存里的会话列表
- * 还没刷新，那条会话仍在，于是立刻变成 stray ⇒ 用户看到一个空的「未分组」。
- * 重启后重新从磁盘加载，会话文件已经没了，stray 自然消失。
+ * 我们只是把文件搬进回收站，并没有真的 dispose 会话，所以 Host 不会自发这个事件。
+ * 不补发的话，前端内存里的会话列表仍然保留那一行 —— 这就是「删了还显示、
+ * 必须重启才消失」的真正原因（重启时列表从磁盘重建，文件已经没了）。
  *
- * 正确的顺序是：**保留记账，让文件先消失**。前端下次刷新列表时按 id 找不到
- * 会话，`summary === undefined` 会被跳过，记账里的残留 id 也就无害了；
- * 而重启后 workspace 注册表启动时的对账（reconcile）会把这些失效 id 清掉。
- *
- * 所以这里只做一件事：把 id 从「已归档」集合里移除（否则归档集合会永久
- * 保留一批已经不存在的 id）。
+ * ⚠️ 同时**不调用 `workspace.detachSession()`**。
+ * 前端 `groupByWorkspace` 会把「在列表里但没被任何 workspace 记账」的会话
+ * 归入 `stray`，渲染成一个「未分组」分组。所以这里保留记账、只让会话从
+ * 列表消失：`summary === undefined` 的行会被跳过，记账里的残留 id 无害；
+ * 下次 DSH 启动时注册表对账会把失效 id 自然清掉。
  */
 async function forgetSessions(ctx, sessionIds) {
   const registry = ctx.get('workspaceRegistry')
@@ -209,9 +209,14 @@ async function forgetSessions(ctx, sessionIds) {
     }
   }
 
-  // 让 Client 立刻重新拉一次会话基线。文件已经搬走，重拉后这些 id 不再出现在
-  // 列表里，stray 自然为空 —— 用户不会再看到那个空的「未分组」分组。
-  // （不刷新的话，前端要等下一次自然刷新或重启才会丢掉它们。）
+  // ① 先让前端把这几行从列表里拿掉（立刻生效，无需重启）
+  for (const id of sessionIds) {
+    try {
+      ctx.emit('api-session/removed', id)
+    } catch {}
+  }
+
+  // ② 再拉一次基线兜底：万一某个前端没订阅到事件，重拉也能丢掉这些 id
   try {
     const sessions = ctx.get('sessions')
     if (sessions && typeof sessions.refresh === 'function') await sessions.refresh()

@@ -13,7 +13,7 @@ DeepSeek Harness 的「归档」很温柔：从侧边栏消失，文件原地不
 ## 能干什么 🎁
 
 - **任意会话，行上直接删** — 鼠标划到会话行尾就冒出一个小垃圾桶 🗑️，点一下变 ✓/✕ 二选一。**不用先归档** 🎯
-- **`...` 菜单里也有一行** — 「移入回收站（可还原）」，顺手
+- **立刻生效** — 删完会话马上从侧边栏消失，还原马上回来。不用重启 DSH ⚡
 - **正在跑的会话不给删** — 包括你此刻正打开的这个。按钮会变灰，鼠标悬停说明原因 🛡️
 - **批量清空** — 设置页里「全部移入回收站」一键搞定，不用一个个勾
 - **移入回收站** — 整个会话目录搬进 `$DSH_HOME/.trash/sessions/`，原位置立刻腾空 🧹
@@ -41,7 +41,7 @@ dsh plugin --profile web add dsh-archive-trash
 或者下 [Release 里的预构建 tarball](https://github.com/hongdougao111/dsh-archive-trash/releases/latest/download/dsh-archive-trash-0.3.0.tgz)，本地装，免构建授权：
 
 ```sh
-dsh plugin --profile web add ./dsh-archive-trash-0.3.0.tgz
+dsh plugin --profile web add ./dsh-archive-trash-0.3.2.tgz
 ```
 
 > 也可以直接在 DSH 里点 **设置 → 插件 → + 添加插件**，把 `dsh-archive-trash` 粘进去 🖱️
@@ -51,8 +51,6 @@ dsh plugin --profile web add ./dsh-archive-trash-0.3.0.tgz
 ## 怎么用 🕹️
 
 **最快的路子**：侧边栏里把鼠标划到**任意**会话行上 → 行尾垃圾桶 🗑️ → ✓ 确认。不用先归档。
-
-**`...` 菜单**：右键会话 → 「移入回收站（可还原）」。
 
 **批量**：`设置 → 归档清理` → 「全部移入回收站 (N)」一键清空。
 
@@ -102,9 +100,9 @@ node selftest.mjs
 
 16 组场景全绿 ✅：列表 / 跨站拒绝 / 空选择 / 移入回收站 / 回收站列表 / 还原 / 目标占用拒绝 / 彻底删除 / 清空回收站 / 不存在的会话 / 未知 action / 幽灵条目自动清理 / 批量清空 / 同毫秒批量不撞 entryId / prune 一致性维护 / **非归档会话也能删**
 
-## 踩过的两个坑 🕳️
+## 踩过的坑 🕳️
 
-这两个都是这个插件自己修掉的真 bug，记下来省得以后又踩：
+这些都是这个插件自己修掉的真 bug，记下来省得以后又踩：
 
 **① 删完会话冒出个「未分组」工作区**
 
@@ -125,6 +123,21 @@ DSH 前端 `groupByWorkspace` 的算法是：按各 Workspace 的 `sessionIds` �
 v0.2.0 把入口限制成「只有已归档的会话才显示删除按钮」——结果想删普通会话得先归档再删，多两步，还容易被当成插件坏了。
 
 **修法**：删除按钮对所有会话开放。配套把 `moveToTrash` 的元数据来源从「只查归档集合」改成 `describeSessions()`（归档集合 → `sessionQuery` 回退），否则普通会话删进回收站后标题是空的。
+
+**④ 删了/还原了界面纹丝不动，必须重启（v0.3.2 修正）**
+
+这是最重要的一条。**前端列表不是每次都从磁盘读的**，它靠两条远端事件增量维护：
+
+```
+Host  ctx.emit('api-session/removed', id)     → 前端 handleSessionRemoved → 列表删掉这行
+Host  ctx.emit('api-session/added', summary)  → 前端 handleSessionAdded  → 列表加回这行
+```
+
+宿主自己只在 `session/created` / `session/disposed` 时发这两个事件。插件只是搬文件、没有真的 dispose 会话，所以**一个都没发** —— 界面当然不动，只有重启时列表从磁盘重建才"修好"。
+
+**修法**：删除后补发 `removed`，还原后补发 `added`（载荷按 `ApiSessionList.summaryFor` 的结构构造：`sessionId / updatedAt / agentAvailable / formatStatus / running / blank`，冷会话就 `running: false, agentAvailable: false`）。
+
+> 这个坑还有一个变体：v0.3.1 只补了删除方向的 `removed`，忘了还原方向的 `added` —— 于是「还原还是不行」。**两个方向必须成对处理。**
 
 ## 兼容性 📋
 

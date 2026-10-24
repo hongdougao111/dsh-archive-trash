@@ -24,11 +24,17 @@ DeepSeek Harness 的「归档」只是把会话从侧边栏藏起来——日志
 
 ## 安装
 
+这个包**尚未发布到 npm**，请从 GitHub 安装：
+
 ```sh
-dsh plugin --profile web add dsh-archive-trash
+dsh plugin --profile web add github:hongdougao111/dsh-archive-trash
 ```
 
-或者在 DSH 的插件市场里搜索 `dsh-archive-trash` 一键安装。
+也可以下载 [Release 里的预构建 tarball](https://github.com/hongdougao111/dsh-archive-trash/releases/latest/download/dsh-archive-trash-0.1.0.tgz) 后本地安装，免去构建授权：
+
+```sh
+dsh plugin --profile web add ./dsh-archive-trash-0.1.0.tgz
+```
 
 安装后需要重启 `dsh web` 让 Host 半边生效。
 

@@ -1,7 +1,7 @@
 {
   "name": "dsh-archive-trash",
-  "version": "0.2.0",
-  "description": "DSH 归档会话清理 🗑️ 会话行上一键删、批量清空、可还原回收站，还会自动清理指向已删文件的僵尸条目。只动会话日志，不碰工作目录。",
+  "version": "0.3.0",
+  "description": "DSH 会话删除 🗑️ 任意会话行上一键删、批量清空、可还原回收站，僵尸条目自动清理。不用先归档再删。只动会话日志，不碰工作目录。",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
@@ -29,7 +29,8 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG-0.3.0.md"
   ],
   "dsh": {
     "bundle": {

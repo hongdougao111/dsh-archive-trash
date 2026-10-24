@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Archive Cleanup 🗑️",
-    "description": "Archiving only hides a session — its log keeps squatting on your disk 🧟 Delete from the session row, bulk-clear, restore from a recoverable trash, and ghost entries that point at deleted files get pruned automatically."
+    "description": "Session deletion for DSH: delete any session right from its sidebar row, bulk-clear, restore from a recoverable trash, and ghost entries get pruned. No need to archive first 🗑️"
   }
 }

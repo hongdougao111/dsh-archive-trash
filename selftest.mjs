@@ -159,7 +159,8 @@ console.log('4) delete —— 移入回收站')
   check('moved 1 个', r.body.moved?.length === 1, r.body)
   check('原目录已消失', !(await fs.stat(dir1).catch(() => null)))
   check('归档集合已摘除', !archived.has(S1), [...archived])
-  check('workspace 归属已 detach', detached.includes(S1), detached)
+  // ⚠️ 故意不 detach：detach 会让前端把该会话当 stray，多出一个「未分组」分组。
+  check('workspace 归属保持不变（避免未分组幽灵）', !detached.includes(S1), detached)
   const trashDirs = await fs.readdir(path.join(TMP, '.trash', 'sessions'))
   check('回收站里有 1 个条目', trashDirs.length === 1, trashDirs)
   const entry = path.join(TMP, '.trash', 'sessions', trashDirs[0])
@@ -237,6 +238,59 @@ console.log('11) 未知 action')
 {
   const r = await request('nope')
   check('返回 400', r.status === 400, r)
+}
+
+console.log('12) 幽灵归档条目自动清理')
+{
+  // 造一个归档集合里有、磁盘上却没有的 id
+  const ghost = 'session-ghost-0000-0000-0000-000000000000'
+  archived.add(ghost)
+  const r = await request('list')
+  check('幽灵条目不出现在列表里', !r.body.items?.some((i) => i.sessionId === ghost), r.body.items)
+  check('归档集合里的幽灵已被摘除', !archived.has(ghost), [...archived])
+  check('返回 prunedOrphans 计数', r.body.prunedOrphans >= 1, r.body)
+}
+
+console.log('13) delete all —— 批量清空归档')
+{
+  // 重新造两个会话
+  const d1 = await makeSession(S1, 'E:/fake/workspace', 'x'.repeat(80))
+  const d2 = await makeSession(S2, 'E:/fake/workspace', 'y'.repeat(90))
+  archived.add(S1)
+  archived.add(S2)
+  const before = (await request('list')).body.items.length
+  check('归档里有 2 条', before === 2, before)
+  const r = await request('delete', { all: true })
+  check('moved 2 个', r.body.moved?.length === 2, r.body)
+  check('两个目录都已消失', !(await fs.stat(d1).catch(() => null)) && !(await fs.stat(d2).catch(() => null)))
+  check('归档集合已清空', archived.size === 0, [...archived])
+  check('回收站里有 2 条', (await request('list')).body.trash.length === 2)
+}
+
+console.log('14) 同一毫秒批量移动 —— entryId 不撞车')
+{
+  // 归档集合里现在应为空，补两个再一起删
+  await makeSession(S1, 'E:/fake/workspace', 'a'.repeat(50))
+  await makeSession(S2, 'E:/fake/workspace', 'b'.repeat(50))
+  archived.add(S1)
+  archived.add(S2)
+  const before = (await request('list')).body.trash.length
+  await request('delete', { all: true })
+  const after = (await request('list')).body.trash.length
+  check('回收站增加 2 条（无覆盖）', after === before + 2, { before, after })
+  // entryId 唯一性
+  const ids = (await request('list')).body.trash.map((t) => t.entryId)
+  check('entryId 全部唯一', new Set(ids).size === ids.length, ids)
+}
+
+console.log('15) prune —— 只做一致性维护，不删数据')
+{
+  const ghost = 'session-ghost-1111-1111-1111-111111111111'
+  archived.add(ghost)
+  const r = await request('prune')
+  check('返回 pruned=1', r.body.pruned === 1, r.body)
+  check('幽灵已移除', !archived.has(ghost), [...archived])
+  check('回收站未受影响', (await request('list')).body.trash.length > 0)
 }
 
 await fs.rm(TMP, { recursive: true, force: true })

@@ -3,9 +3,9 @@
  *
  * 职责：
  *  - 列出所有「已归档」会话（workspaceRegistry.archivedSessionIds）；
- *  - 把选中的会话目录整体移进回收站（$DSH_HOME/.trash/sessions/），可还原；
- *  - 彻底清空回收站；
- *  - 从 workspace 的归档集合 / 会话归属里摘掉对应 id，避免残留脏数据。
+ *  - 把选中的（或全部）会话目录整体移进回收站（$DSH_HOME/.trash/sessions/），可还原；
+ *  - 彻底删除回收站条目；
+ *  - 维护归档集合的一致性（幽灵 id 自动清理）。
  *
  * 会话在磁盘上的布局（jsonl 持久化后端）：
  *   $DSH_HOME/sessions/<cwd 编码目录>/<sessionId>/session.v4.jsonl.zstd
@@ -21,6 +21,8 @@ const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const SESSIONS_ROOT = path.join(DSH_HOME, 'sessions')
 const TRASH_ROOT = path.join(DSH_HOME, '.trash', 'sessions')
 const API_PATH = '/dsh-archive-trash'
+/** 一次移动操作的上限，防止误传超大数组把事件循环堵死。 */
+const MAX_BATCH = 2000
 
 /** 读取目录，失败返回空数组（目录不存在 = 还没建过会话）。 */
 async function readdirSafe(dir) {
@@ -29,6 +31,23 @@ async function readdirSafe(dir) {
   } catch {
     return []
   }
+}
+
+/** 递归求目录总字节数（只算文件）。 */
+async function dirBytes(dir) {
+  let total = 0
+  const entries = await readdirSafe(dir)
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      total += await dirBytes(full)
+    } else if (entry.isFile()) {
+      try {
+        total += (await fs.stat(full)).size
+      } catch {}
+    }
+  }
+  return total
 }
 
 /**
@@ -69,16 +88,10 @@ async function listTrashEntries() {
       meta = null
     }
     let bytes = 0
+    const payloadDir = path.join(dir, 'payload')
     try {
-      const stat = await fs.stat(path.join(dir, 'payload'))
-      if (stat.isDirectory()) {
-        for (const f of await readdirSafe(path.join(dir, 'payload'))) {
-          if (!f.isFile()) continue
-          try {
-            bytes += (await fs.stat(path.join(dir, 'payload', f.name))).size
-          } catch {}
-        }
-      }
+      const stat = await fs.stat(payloadDir)
+      if (stat.isDirectory()) bytes = await dirBytes(payloadDir)
     } catch {}
     out.push({
       entryId: entry.name,
@@ -99,7 +112,7 @@ async function listArchived(ctx) {
   const registry = ctx.get('workspaceRegistry')
   if (!registry) return { items: [], missingRegistry: true }
   const archivedIds = [...(registry.archivedSessionIds ?? [])].map(String)
-  if (archivedIds.length === 0) return { items: [], missingRegistry: false }
+  if (archivedIds.length === 0) return { items: [], missingRegistry: false, prunedOrphans: 0 }
 
   const titles = new Map()
   const cwds = new Map()
@@ -132,19 +145,15 @@ async function listArchived(ctx) {
 
   const index = await indexSessionDirs()
   const items = []
+  /** 归档集合里指向「磁盘上已经没有」的 id —— 属于历史残留，顺手清掉。 */
+  const orphans = []
   for (const id of archivedIds) {
     const dir = index.get(id) ?? ''
-    let bytes = 0
-    let exists = false
-    if (dir) {
-      exists = true
-      const files = await readdirSafe(dir)
-      for (const f of files) {
-        if (!f.isFile()) continue
-        try {
-          bytes += (await fs.stat(path.join(dir, f.name))).size
-        } catch {}
-      }
+    if (!dir) {
+      // 磁盘上不再有这个会话：不要再展示成「日志已不在磁盘上」这种幽灵行，
+      // 记下来待清理，然后跳过。
+      orphans.push(id)
+      continue
     }
     items.push({
       sessionId: id,
@@ -152,60 +161,93 @@ async function listArchived(ctx) {
       cwd: cwds.get(id) ?? '',
       createdAt: createdAts.get(id) ?? 0,
       dir,
-      exists,
-      bytes,
+      exists: true,
+      bytes: await dirBytes(dir),
     })
   }
+
+  // 清理幽灵条目：它们既不在磁盘上、也不该继续占着归档集合。
+  if (orphans.length > 0) {
+    for (const id of orphans) {
+      try {
+        await registry.unarchiveSession(id)
+      } catch {}
+    }
+  }
+
   items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-  return { items, missingRegistry: false }
+  return { items, missingRegistry: false, prunedOrphans: orphans.length }
 }
 
-/** 从 workspace 注册表里摘掉这些 id（归档集合 + 各 workspace 的归属）。 */
+/**
+ * 从归档集合里摘掉这些 id。
+ *
+ * ⚠️ 这里**故意不调用 `workspace.detachSession()`**。
+ *
+ * 前端 `groupByWorkspace` 的算法是：先按各 workspace 的 `sessionIds` 记账，
+ * 凡是「在会话列表里、但没被任何 workspace 记账」的会话都会落进 stray，
+ * 于是多出一个「未分组」分组（见 dsh-client-ui-workspace 的 groupByWorkspace）。
+ *
+ * 而 `detachSession` 正是把 id 从记账里摘掉 —— 但此刻前端内存里的会话列表
+ * 还没刷新，那条会话仍在，于是立刻变成 stray ⇒ 用户看到一个空的「未分组」。
+ * 重启后重新从磁盘加载，会话文件已经没了，stray 自然消失。
+ *
+ * 正确的顺序是：**保留记账，让文件先消失**。前端下次刷新列表时按 id 找不到
+ * 会话，`summary === undefined` 会被跳过，记账里的残留 id 也就无害了；
+ * 而重启后 workspace 注册表启动时的对账（reconcile）会把这些失效 id 清掉。
+ *
+ * 所以这里只做一件事：把 id 从「已归档」集合里移除（否则归档集合会永久
+ * 保留一批已经不存在的 id）。
+ */
 async function forgetSessions(ctx, sessionIds) {
   const registry = ctx.get('workspaceRegistry')
-  if (!registry) return
-  for (const id of sessionIds) {
-    try {
-      await registry.unarchiveSession(id)
-    } catch {}
-    try {
-      const workspace = (registry.list?.() ?? []).find((w) =>
-        (w.sessionIds ?? []).some((sid) => String(sid) === String(id)),
-      )
-      if (workspace) await workspace.detachSession(id)
-    } catch {}
+  if (registry) {
+    for (const id of sessionIds) {
+      try {
+        await registry.unarchiveSession(id)
+      } catch {}
+    }
   }
+
+  // 让 Client 立刻重新拉一次会话基线。文件已经搬走，重拉后这些 id 不再出现在
+  // 列表里，stray 自然为空 —— 用户不会再看到那个空的「未分组」分组。
+  // （不刷新的话，前端要等下一次自然刷新或重启才会丢掉它们。）
+  try {
+    const sessions = ctx.get('sessions')
+    if (sessions && typeof sessions.refresh === 'function') await sessions.refresh()
+  } catch {}
 }
 
 /** 把若干会话移进回收站。 */
 async function moveToTrash(ctx, sessionIds) {
+  const ids = sessionIds.slice(0, MAX_BATCH).map(String)
   const index = await indexSessionDirs()
   const archived = await listArchived(ctx)
   const known = new Map(archived.items.map((item) => [item.sessionId, item]))
   await fs.mkdir(TRASH_ROOT, { recursive: true })
   const moved = []
   const failed = []
-  for (const rawId of sessionIds) {
-    const id = String(rawId)
+  // 同一个毫秒内移动多个会话时会撞 entryId，这里加个序号。
+  let seq = 0
+  for (const id of ids) {
     const dir = index.get(id)
     if (!dir) {
       failed.push({ sessionId: id, reason: 'not-found' })
       continue
     }
-    const entryId = `${Date.now()}-${id}`
+    const entryId = `${Date.now()}-${seq++}-${id}`
     const entryDir = path.join(TRASH_ROOT, entryId)
     try {
       await fs.mkdir(entryDir, { recursive: true })
       const payload = path.join(entryDir, 'payload')
       await fs.rename(dir, payload)
-      const cwd = known.get(id)?.cwd ?? ''
       await fs.writeFile(
         path.join(entryDir, 'meta.json'),
         JSON.stringify(
           {
             sessionId: id,
             originalPath: dir,
-            cwd,
+            cwd: known.get(id)?.cwd ?? '',
             title: known.get(id)?.title ?? '',
             deletedAt: Date.now(),
           },
@@ -220,7 +262,7 @@ async function moveToTrash(ctx, sessionIds) {
     }
   }
   if (moved.length > 0) await forgetSessions(ctx, moved)
-  return { moved, failed }
+  return { moved, failed, truncated: sessionIds.length > ids.length }
 }
 
 /** 从回收站还原。 */
@@ -357,7 +399,12 @@ export function apply(ctx) {
             return sendJson(res, 200, { ok: true, ...archived, trash })
           }
           case 'delete': {
-            const ids = Array.isArray(body.sessionIds) ? body.sessionIds : []
+            let ids = Array.isArray(body.sessionIds) ? body.sessionIds : []
+            // 批量：all=true 时把当前所有归档会话一次性移入回收站
+            if (body.all === true) {
+              const archived = await listArchived(ctx)
+              ids = archived.items.map((item) => item.sessionId)
+            }
             if (ids.length === 0) return sendJson(res, 400, { ok: false, error: 'empty-selection' })
             const result = await moveToTrash(ctx, ids)
             return sendJson(res, 200, { ok: true, ...result })
@@ -369,9 +416,15 @@ export function apply(ctx) {
             return sendJson(res, 200, { ok: true, ...result })
           }
           case 'purge': {
+            // entryIds 为空 = 清空整个回收站（前端「清空」按钮就是这个语义）
             const entryIds = Array.isArray(body.entryIds) ? body.entryIds : []
             const result = await purgeTrash(entryIds)
             return sendJson(res, 200, { ok: true, ...result })
+          }
+          case 'prune': {
+            // 只做一致性维护：清掉归档集合里指向已不存在会话的幽灵 id
+            const archived = await listArchived(ctx)
+            return sendJson(res, 200, { ok: true, pruned: archived.prunedOrphans ?? 0 })
           }
           default:
             return sendJson(res, 400, { ok: false, error: `unknown-action:${action}` })

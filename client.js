@@ -115,9 +115,11 @@ window.__ModuleLoader__.load({
       opFailed: (e) => `操作失败：${e}`,
       noRegistry: '当前 profile 没有 workspace 注册表，无法列出归档会话。',
       // ── 会话行上的删除入口 ──────────────────────────────────────────
-      rowDelete: '删除这个归档会话',
+      rowDelete: '删除这个会话',
       menuDelete: '移入回收站',
       menuDeleteHint: '（可还原）',
+      rowRunning: '正在运行的会话不能删除，先等它结束',
+      menuRunning: '（运行中）',
       rowConfirmTitle: '把这个会话移进回收站？',
       rowConfirmBody: (name) => `「${name}」会被移到回收站，随时可以还原。只删除会话日志，工作目录不受影响。`,
       rowDone: '已移入回收站，可在 设置 → 归档清理 里还原 🧹',
@@ -162,9 +164,11 @@ window.__ModuleLoader__.load({
       opFailed: (e) => `Operation failed: ${e}`,
       noRegistry: 'This profile has no workspace registry, so archived sessions cannot be listed.',
       // ── per-row delete entry ────────────────────────────────────────
-      rowDelete: 'Delete this archived session',
+      rowDelete: 'Delete this session',
       menuDelete: 'Move to trash',
       menuDeleteHint: '(recoverable)',
+      rowRunning: 'A running session cannot be deleted — wait for it to finish',
+      menuRunning: '(running)',
       rowConfirmTitle: 'Move this session to the trash?',
       rowConfirmBody: (name) => `“${name}” will be moved to the trash and can be restored anytime. Only the session log is removed; working directories are untouched.`,
       rowDone: 'Moved to trash — restore it from Settings → Archive Cleanup 🧹',
@@ -243,23 +247,24 @@ window.__ModuleLoader__.load({
 
     // ── 会话行上的删除按钮（sidebar.workspaces.session.row.action）─────────
     /**
-     * ownerProps 只给 sessionId 与 displayTitle；useWorkspaces 是本 slot 的标准 prop，
-     * 用来判断该行是否已归档 —— 只有已归档的会话才允许在这里删。
+     * ownerProps 只给 sessionId 与 displayTitle；useWorkspaces 是本 slot 的标准 prop。
+     * 删除按钮对**所有**会话开放（不限归档状态）——归档是宿主的事，
+     * 删除是这个插件的事，两个入口分开，用户不用先归档再删。
      */
-    function SessionRowDeleteAction({ sessionId, displayTitle, useWorkspaces, useSessions }) {
+    function SessionRowDeleteAction({ sessionId, displayTitle, useSessions, useSessionStatus }) {
       useEffect(() => ensureStyle(), [])
-      const archivedIds = useWorkspaces((s) => s.archivedSessionIds)
-      const isArchived = Array.isArray(archivedIds) && archivedIds.includes(sessionId)
       // ⚠️ hook 必须无条件调用：不能用 `a || useXxx()` 这种短路写法，
       //    否则某些行少调用一个 hook，React 会直接报 "rendered fewer hooks"。
       const sessionTitle = useSessions((s) => s.byId[sessionId]?.displayTitle)
+      // 正在跑的会话（含当前正打开的这个）不给删 —— 删了会拖着一堆活着的引用。
+      const running = useSessionStatus((s) => s[sessionId]?.running ?? false)
       const fallbackTitle = String(sessionTitle || '').trim()
       const title = String(displayTitle || '').trim() || fallbackTitle
       const [phase, setPhase] = useState('idle') // idle | confirm | busy
       const [error, setError] = useState(null)
 
-      // 未归档的会话不显示这个按钮（归档本身是宿主的入口，删除只针对已归档的）
-      if (!isArchived) return null
+      // 没有任何会话可删的理由：只有「不知道是谁」才不显示
+      if (!sessionId) return null
 
       const doDelete = async () => {
         setPhase('busy')
@@ -322,12 +327,17 @@ window.__ModuleLoader__.load({
         {
           type: 'button',
           className: 'ac-rowbtn',
-          title: error ? `${t('rowDelete')} — ${error}` : t('rowDelete'),
-          'aria-label': t('rowDelete'),
-          disabled: phase === 'busy',
+          title: running
+            ? t('rowRunning')
+            : error
+              ? `${t('rowDelete')} — ${error}`
+              : t('rowDelete'),
+          'aria-label': running ? t('rowRunning') : t('rowDelete'),
+          disabled: phase === 'busy' || running,
           onClick: (e) => {
             e.stopPropagation()
             e.preventDefault()
+            if (running) return
             setPhase('confirm')
           },
         },
@@ -336,19 +346,19 @@ window.__ModuleLoader__.load({
     }
 
     // ── 会话 “...” 菜单里的一行（sidebar.workspaces.session.menu.item）─────
-    function SessionMenuDeleteItem({ sessionId, displayTitle, useWorkspaces, useSessions, useMenuOpenState }) {
+    function SessionMenuDeleteItem({ sessionId, displayTitle, useSessions, useMenuOpenState, useSessionStatus }) {
       useEffect(() => ensureStyle(), [])
-      const archivedIds = useWorkspaces((s) => s.archivedSessionIds)
-      const isArchived = Array.isArray(archivedIds) && archivedIds.includes(sessionId)
+      // 菜单项同样对所有会话开放
       // useMenuOpenState() 返回 [open, setOpen] 这个 pair（宿主 ArchiveSessionMenuItem 同款用法）
       const menuState = useMenuOpenState ? useMenuOpenState() : undefined
       const setMenuOpen = Array.isArray(menuState) ? menuState[1] : undefined
       const sessionTitle = useSessions((s) => s.byId[sessionId]?.displayTitle)
+      const running = useSessionStatus((s) => s[sessionId]?.running ?? false)
       const fallbackTitle = String(sessionTitle || '').trim()
       const title = String(displayTitle || '').trim() || fallbackTitle
       const [busy, setBusy] = useState(false)
 
-      if (!isArchived) return null
+      if (!sessionId) return null
 
       const onClick = async () => {
         setBusy(true)
@@ -368,13 +378,13 @@ window.__ModuleLoader__.load({
           type: 'button',
           role: 'menuitem',
           className: 'ac-menuitem danger',
-          disabled: busy,
-          title: t('rowConfirmBody', title || t('noTitle')),
-          onClick,
+          disabled: busy || running,
+          title: running ? t('rowRunning') : t('rowConfirmBody', title || t('noTitle')),
+          onClick: running ? undefined : onClick,
         },
         h('span', { className: 'ac-menuitem-icon' }, h(TrashIcon, { size: 13 })),
         h('span', null, t('menuDelete')),
-        h('span', { style: { fontSize: 11, opacity: 0.6 } }, t('menuDeleteHint')),
+        h('span', { style: { fontSize: 11, opacity: 0.6 } }, running ? t('menuRunning') : t('menuDeleteHint')),
       )
     }
 

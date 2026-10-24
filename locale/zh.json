@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "归档清理 · Archive Cleanup",
+    "description": "把已归档的 DSH 会话移进可还原的回收站，或彻底删除。设置页内置面板，支持多选、还原与一键清空。"
+  }
+}

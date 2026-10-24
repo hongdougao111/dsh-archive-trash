@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Archive Cleanup",
+    "description": "Move archived DSH sessions into a recoverable trash or delete them for good. A settings panel with multi-select, restore, and one-click empty."
+  }
+}

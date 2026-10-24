@@ -1,0 +1,7 @@
+# dsh-archive-trash —— 归档会话清理
+#
+# 一行 Host 插件：注册 /dsh-archive-trash 本地 API，
+# 并（通过 client.js）在「设置」里挂一个「归档清理」页面。
+- insert:
+    - id: dsh-archive-trash
+      name: dsh-archive-trash

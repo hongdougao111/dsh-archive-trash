@@ -1,0 +1,63 @@
+{
+  "name": "dsh-archive-trash",
+  "version": "0.1.0",
+  "description": "DSH 归档会话清理：把已归档的会话移进可还原的回收站，或彻底删除。设置页内置面板，支持多选、还原与一键清空。",
+  "type": "module",
+  "main": "index.js",
+  "icon": "./icon.svg",
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "deepseek-harness",
+    "archive",
+    "session",
+    "trash",
+    "cleanup"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hongdougao111/dsh-archive-trash.git"
+  },
+  "homepage": "https://github.com/hongdougao111/dsh-archive-trash#readme",
+  "bugs": {
+    "url": "https://github.com/hongdougao111/dsh-archive-trash/issues"
+  },
+  "license": "MIT"
+}

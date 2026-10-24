@@ -218,12 +218,62 @@ async function forgetSessions(ctx, sessionIds) {
   } catch {}
 }
 
+/**
+ * 取若干会话的标题与 cwd（**不限归档状态**）。
+ *
+ * 会话行上的删除按钮对普通会话也开放，所以这里不能只查归档集合；
+ * 但普通会话在归档集合里查不到标题，就按需回退到 sessionQuery。
+ *
+ * @returns {Promise<Map<string, {title: string, cwd: string}>>}
+ */
+async function describeSessions(ctx, ids) {
+  const out = new Map()
+  if (ids.length === 0) return out
+
+  // 先吃归档集合这份「便宜」的来源
+  try {
+    const archived = await listArchived(ctx)
+    for (const item of archived.items) {
+      if (ids.includes(item.sessionId)) {
+        out.set(item.sessionId, { title: item.title || '', cwd: item.cwd || '' })
+      }
+    }
+  } catch {}
+
+  // 还缺的，用 sessionQuery 补（一次批量读标题 + 一次列表拿 cwd）
+  const missing = ids.filter((id) => !out.has(id))
+  if (missing.length === 0) return out
+  const query = ctx.get('sessionQuery')
+  if (!query) {
+    for (const id of missing) out.set(id, { title: '', cwd: '' })
+    return out
+  }
+  const cwds = new Map()
+  try {
+    for (const record of await query.listSessions()) {
+      cwds.set(String(record.header?.id ?? ''), record.header?.cwd ?? '')
+    }
+  } catch {}
+  const titles = new Map()
+  try {
+    for (const result of await query.readTitleSnapshots(missing)) {
+      if (result.status === 'fulfilled') {
+        titles.set(String(result.sessionId), result.value.title?.title ?? '')
+      }
+    }
+  } catch {}
+  for (const id of missing) {
+    out.set(id, { title: titles.get(id) ?? '', cwd: cwds.get(id) ?? '' })
+  }
+  return out
+}
+
 /** 把若干会话移进回收站。 */
 async function moveToTrash(ctx, sessionIds) {
   const ids = sessionIds.slice(0, MAX_BATCH).map(String)
   const index = await indexSessionDirs()
-  const archived = await listArchived(ctx)
-  const known = new Map(archived.items.map((item) => [item.sessionId, item]))
+  // 不限归档状态：会话行上的删除按钮对普通会话也生效
+  const known = await describeSessions(ctx, ids)
   await fs.mkdir(TRASH_ROOT, { recursive: true })
   const moved = []
   const failed = []

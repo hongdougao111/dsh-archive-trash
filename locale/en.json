@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Archive Cleanup",
-    "description": "Move archived DSH sessions into a recoverable trash or delete them for good. A settings panel with multi-select, restore, and one-click empty."
+    "title": "Archive Cleanup 🗑️",
+    "description": "Archiving only hides a session — its log keeps squatting on your disk forever 🧟 This plugin gives it a proper send-off: move it to a recoverable trash, or delete it for good. A settings panel with multi-select, restore, and one-click empty."
   }
 }

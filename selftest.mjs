@@ -293,6 +293,21 @@ console.log('15) prune —— 只做一致性维护，不删数据')
   check('回收站未受影响', (await request('list')).body.trash.length > 0)
 }
 
+console.log('16) delete —— 非归档会话也能删')
+{
+  const S3 = 'session-cccc3333-4444-5555-6666-777788889999'
+  const d3 = await makeSession(S3, 'E:/fake/workspace', 'z'.repeat(70))
+  check('删除前不在归档集合', !archived.has(S3))
+  const r = await request('delete', { sessionIds: [S3] })
+  check('返回 200', r.status === 200, r)
+  check('moved 1 个', r.body.moved?.length === 1, r.body)
+  check('目录已消失', !(await fs.stat(d3).catch(() => null)))
+  const trash = (await request('list')).body.trash
+  const entry = trash.find((t) => t.sessionId === S3)
+  check('进了回收站', entry !== undefined, trash)
+  check('meta 有 cwd（非归档会话也补上了）', typeof entry?.cwd === 'string', entry)
+}
+
 await fs.rm(TMP, { recursive: true, force: true })
 console.log('')
 console.log(failures === 0 ? '全部通过 ✓' : `${failures} 项失败 ✗`)

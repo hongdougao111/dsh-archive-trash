@@ -53,14 +53,6 @@ window.__ModuleLoader__.load({
 .ac-rowbtn:hover{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 14%,transparent)}
 .ac-rowbtn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .ac-rowbtn:disabled{opacity:.4;cursor:default}
-/* 会话 “...” 菜单里的一行 */
-.ac-menuitem{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1;text-align:left;padding:8px 10px;border-radius:6px;width:100%;display:flex;align-items:center;gap:8px;cursor:pointer}
-.ac-menuitem:hover{background:var(--dsw-alias-state-error-primary);color:#fff}
-.ac-menuitem:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
-.ac-menuitem:disabled{opacity:.4;cursor:default}
-.ac-menuitem.danger{color:var(--dsw-alias-state-error-primary)}
-.ac-menuitem.danger:hover{background:var(--dsw-alias-state-error-primary);color:#fff}
-.ac-menuitem-icon{display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center;flex:none}
 `
 
     function ensureStyle() {
@@ -116,10 +108,7 @@ window.__ModuleLoader__.load({
       noRegistry: '当前 profile 没有 workspace 注册表，无法列出归档会话。',
       // ── 会话行上的删除入口 ──────────────────────────────────────────
       rowDelete: '删除这个会话',
-      menuDelete: '移入回收站',
-      menuDeleteHint: '（可还原）',
       rowRunning: '正在运行的会话不能删除，先等它结束',
-      menuRunning: '（运行中）',
       rowConfirmTitle: '把这个会话移进回收站？',
       rowConfirmBody: (name) => `「${name}」会被移到回收站，随时可以还原。只删除会话日志，工作目录不受影响。`,
       rowDone: '已移入回收站，可在 设置 → 归档清理 里还原 🧹',
@@ -165,10 +154,7 @@ window.__ModuleLoader__.load({
       noRegistry: 'This profile has no workspace registry, so archived sessions cannot be listed.',
       // ── per-row delete entry ────────────────────────────────────────
       rowDelete: 'Delete this session',
-      menuDelete: 'Move to trash',
-      menuDeleteHint: '(recoverable)',
       rowRunning: 'A running session cannot be deleted — wait for it to finish',
-      menuRunning: '(running)',
       rowConfirmTitle: 'Move this session to the trash?',
       rowConfirmBody: (name) => `“${name}” will be moved to the trash and can be restored anytime. Only the session log is removed; working directories are untouched.`,
       rowDone: 'Moved to trash — restore it from Settings → Archive Cleanup 🧹',
@@ -342,49 +328,6 @@ window.__ModuleLoader__.load({
           },
         },
         h(TrashIcon, { size: 13 }),
-      )
-    }
-
-    // ── 会话 “...” 菜单里的一行（sidebar.workspaces.session.menu.item）─────
-    function SessionMenuDeleteItem({ sessionId, displayTitle, useSessions, useMenuOpenState, useSessionStatus }) {
-      useEffect(() => ensureStyle(), [])
-      // 菜单项同样对所有会话开放
-      // useMenuOpenState() 返回 [open, setOpen] 这个 pair（宿主 ArchiveSessionMenuItem 同款用法）
-      const menuState = useMenuOpenState ? useMenuOpenState() : undefined
-      const setMenuOpen = Array.isArray(menuState) ? menuState[1] : undefined
-      const sessionTitle = useSessions((s) => s.byId[sessionId]?.displayTitle)
-      const running = useSessionStatus((s) => s[sessionId]?.running ?? false)
-      const fallbackTitle = String(sessionTitle || '').trim()
-      const title = String(displayTitle || '').trim() || fallbackTitle
-      const [busy, setBusy] = useState(false)
-
-      if (!sessionId) return null
-
-      const onClick = async () => {
-        setBusy(true)
-        try {
-          if (typeof setMenuOpen === 'function') setMenuOpen(false)
-          await callApi('delete', { sessionIds: [sessionId] })
-        } catch {
-          /* 失败就保持菜单开着，用户能看到会话还在 */
-        } finally {
-          setBusy(false)
-        }
-      }
-
-      return h(
-        'button',
-        {
-          type: 'button',
-          role: 'menuitem',
-          className: 'ac-menuitem danger',
-          disabled: busy || running,
-          title: running ? t('rowRunning') : t('rowConfirmBody', title || t('noTitle')),
-          onClick: running ? undefined : onClick,
-        },
-        h('span', { className: 'ac-menuitem-icon' }, h(TrashIcon, { size: 13 })),
-        h('span', null, t('menuDelete')),
-        h('span', { style: { fontSize: 11, opacity: 0.6 } }, running ? t('menuRunning') : t('menuDeleteHint')),
       )
     }
 
@@ -734,19 +677,12 @@ window.__ModuleLoader__.load({
           ),
         )
 
-        // 会话行尾的删除按钮（只对已归档会话出现）
+        // 会话行尾的删除按钮（对所有会话显示）
+        // 只保留这一个入口：`...` 菜单里不再重复放一条，避免两个位置同一功能。
         slots.inject('sidebar.workspaces.session.row.action', () =>
           slots.register(
             { name: 'sidebar.workspaces.session.row.action', id: 'archive-trash-delete', order: 150 },
             SessionRowDeleteAction,
-          ),
-        )
-
-        // “...” 菜单里的一行（只对已归档会话出现）
-        slots.inject('sidebar.workspaces.session.menu.item', () =>
-          slots.register(
-            { name: 'sidebar.workspaces.session.menu.item', id: 'archive-trash-menu-delete', order: 410 },
-            SessionMenuDeleteItem,
           ),
         )
       },

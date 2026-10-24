@@ -48,6 +48,19 @@ window.__ModuleLoader__.load({
 .ac-msg.warn{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 14%,transparent);color:var(--dsw-alias-state-warn-primary)}
 .ac-confirm{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:8px;border:1px solid var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent);font-size:12px;color:var(--dsw-alias-label-primary)}
 .ac-hint{font-size:11px;color:var(--dsw-alias-label-secondary);line-height:1.6;margin:0}
+/* 会话行上的删除图标按钮（hover 出现） */
+.ac-rowbtn{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-secondary);width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;flex:none}
+.ac-rowbtn:hover{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 14%,transparent)}
+.ac-rowbtn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.ac-rowbtn:disabled{opacity:.4;cursor:default}
+/* 会话 “...” 菜单里的一行 */
+.ac-menuitem{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1;text-align:left;padding:8px 10px;border-radius:6px;width:100%;display:flex;align-items:center;gap:8px;cursor:pointer}
+.ac-menuitem:hover{background:var(--dsw-alias-state-error-primary);color:#fff}
+.ac-menuitem:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.ac-menuitem:disabled{opacity:.4;cursor:default}
+.ac-menuitem.danger{color:var(--dsw-alias-state-error-primary)}
+.ac-menuitem.danger:hover{background:var(--dsw-alias-state-error-primary);color:#fff}
+.ac-menuitem-icon{display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center;flex:none}
 `
 
     function ensureStyle() {
@@ -101,6 +114,17 @@ window.__ModuleLoader__.load({
       loadFailed: (e) => `读取失败：${e}`,
       opFailed: (e) => `操作失败：${e}`,
       noRegistry: '当前 profile 没有 workspace 注册表，无法列出归档会话。',
+      // ── 会话行上的删除入口 ──────────────────────────────────────────
+      rowDelete: '删除这个归档会话',
+      menuDelete: '移入回收站',
+      menuDeleteHint: '（可还原）',
+      rowConfirmTitle: '把这个会话移进回收站？',
+      rowConfirmBody: (name) => `「${name}」会被移到回收站，随时可以还原。只删除会话日志，工作目录不受影响。`,
+      rowDone: '已移入回收站，可在 设置 → 归档清理 里还原 🧹',
+      bulkAll: '全部移入回收站',
+      confirmTrashAll: (n) => `把当前 ${n} 个归档会话**全部**移进回收站？之后可以一起还原。`,
+      bulkDone: (n) => `已全部移入回收站：${n} 个 🧹`,
+      bulkNothing: '当前没有可删除的归档会话',
     }
     const EN = {
       sectionLabel: 'Archive Cleanup',
@@ -137,6 +161,17 @@ window.__ModuleLoader__.load({
       loadFailed: (e) => `Load failed: ${e}`,
       opFailed: (e) => `Operation failed: ${e}`,
       noRegistry: 'This profile has no workspace registry, so archived sessions cannot be listed.',
+      // ── per-row delete entry ────────────────────────────────────────
+      rowDelete: 'Delete this archived session',
+      menuDelete: 'Move to trash',
+      menuDeleteHint: '(recoverable)',
+      rowConfirmTitle: 'Move this session to the trash?',
+      rowConfirmBody: (name) => `“${name}” will be moved to the trash and can be restored anytime. Only the session log is removed; working directories are untouched.`,
+      rowDone: 'Moved to trash — restore it from Settings → Archive Cleanup 🧹',
+      bulkAll: 'Move all to trash',
+      confirmTrashAll: (n) => `Move **all ${n}** archived sessions to the trash? You can restore them together later.`,
+      bulkDone: (n) => `Moved all to trash: ${n} 🧹`,
+      bulkNothing: 'No archived sessions to delete right now',
     }
     let locale = 'zh'
     function t(key, ...args) {
@@ -182,6 +217,165 @@ window.__ModuleLoader__.load({
       const parts = s.split(/[\\/]+/).filter(Boolean)
       if (parts.length <= 2) return s
       return '…' + '/' + parts.slice(-2).join('/')
+    }
+
+    // ── 图标（内联 SVG，避免依赖 primitives 包）───────────────────────────
+    function TrashIcon({ size = 14 }) {
+      return h(
+        'svg',
+        {
+          viewBox: '0 0 16 16',
+          width: size,
+          height: size,
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.5,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': true,
+        },
+        h('path', { d: 'M2.5 4.5h11' }),
+        h('path', { d: 'M6 4.5V3a.5.5 0 0 1 .5-.5h3A.5.5 0 0 1 10 3v1.5' }),
+        h('path', { d: 'M4 4.5l.6 8.1a1 1 0 0 0 1 .9h4.8a1 1 0 0 0 1-.9L12 4.5' }),
+        h('path', { d: 'M6.7 7v4M9.3 7v4' }),
+      )
+    }
+
+    // ── 会话行上的删除按钮（sidebar.workspaces.session.row.action）─────────
+    /**
+     * ownerProps 只给 sessionId 与 displayTitle；useWorkspaces 是本 slot 的标准 prop，
+     * 用来判断该行是否已归档 —— 只有已归档的会话才允许在这里删。
+     */
+    function SessionRowDeleteAction({ sessionId, displayTitle, useWorkspaces, useSessions }) {
+      useEffect(() => ensureStyle(), [])
+      const archivedIds = useWorkspaces((s) => s.archivedSessionIds)
+      const isArchived = Array.isArray(archivedIds) && archivedIds.includes(sessionId)
+      // ⚠️ hook 必须无条件调用：不能用 `a || useXxx()` 这种短路写法，
+      //    否则某些行少调用一个 hook，React 会直接报 "rendered fewer hooks"。
+      const sessionTitle = useSessions((s) => s.byId[sessionId]?.displayTitle)
+      const fallbackTitle = String(sessionTitle || '').trim()
+      const title = String(displayTitle || '').trim() || fallbackTitle
+      const [phase, setPhase] = useState('idle') // idle | confirm | busy
+      const [error, setError] = useState(null)
+
+      // 未归档的会话不显示这个按钮（归档本身是宿主的入口，删除只针对已归档的）
+      if (!isArchived) return null
+
+      const doDelete = async () => {
+        setPhase('busy')
+        setError(null)
+        try {
+          const data = await callApi('delete', { sessionIds: [sessionId] })
+          if (Array.isArray(data.failed) && data.failed.length > 0) {
+            throw new Error(data.failed[0].reason || 'failed')
+          }
+          setPhase('idle')
+        } catch (e) {
+          setError(String(e?.message ?? e))
+          setPhase('idle')
+        }
+      }
+
+      if (phase === 'confirm') {
+        return h(
+          'div',
+          {
+            className: 'ac-rowbtn',
+            style: { width: 'auto', padding: '0 6px', background: 'transparent' },
+            role: 'group',
+            'aria-label': t('rowConfirmTitle'),
+            title: t('rowConfirmBody', title || t('noTitle')),
+          },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'ac-rowbtn',
+              title: t('yes'),
+              'aria-label': t('yes'),
+              onClick: (e) => {
+                e.stopPropagation()
+                void doDelete()
+              },
+            },
+            h('span', { style: { fontSize: 11, color: 'var(--dsw-alias-state-error-primary)' } }, '✓'),
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'ac-rowbtn',
+              title: t('no'),
+              'aria-label': t('no'),
+              onClick: (e) => {
+                e.stopPropagation()
+                setPhase('idle')
+              },
+            },
+            h('span', { style: { fontSize: 11 } }, '✕'),
+          ),
+        )
+      }
+
+      return h(
+        'button',
+        {
+          type: 'button',
+          className: 'ac-rowbtn',
+          title: error ? `${t('rowDelete')} — ${error}` : t('rowDelete'),
+          'aria-label': t('rowDelete'),
+          disabled: phase === 'busy',
+          onClick: (e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            setPhase('confirm')
+          },
+        },
+        h(TrashIcon, { size: 13 }),
+      )
+    }
+
+    // ── 会话 “...” 菜单里的一行（sidebar.workspaces.session.menu.item）─────
+    function SessionMenuDeleteItem({ sessionId, displayTitle, useWorkspaces, useSessions, useMenuOpenState }) {
+      useEffect(() => ensureStyle(), [])
+      const archivedIds = useWorkspaces((s) => s.archivedSessionIds)
+      const isArchived = Array.isArray(archivedIds) && archivedIds.includes(sessionId)
+      // useMenuOpenState() 返回 [open, setOpen] 这个 pair（宿主 ArchiveSessionMenuItem 同款用法）
+      const menuState = useMenuOpenState ? useMenuOpenState() : undefined
+      const setMenuOpen = Array.isArray(menuState) ? menuState[1] : undefined
+      const sessionTitle = useSessions((s) => s.byId[sessionId]?.displayTitle)
+      const fallbackTitle = String(sessionTitle || '').trim()
+      const title = String(displayTitle || '').trim() || fallbackTitle
+      const [busy, setBusy] = useState(false)
+
+      if (!isArchived) return null
+
+      const onClick = async () => {
+        setBusy(true)
+        try {
+          if (typeof setMenuOpen === 'function') setMenuOpen(false)
+          await callApi('delete', { sessionIds: [sessionId] })
+        } catch {
+          /* 失败就保持菜单开着，用户能看到会话还在 */
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      return h(
+        'button',
+        {
+          type: 'button',
+          role: 'menuitem',
+          className: 'ac-menuitem danger',
+          disabled: busy,
+          title: t('rowConfirmBody', title || t('noTitle')),
+          onClick,
+        },
+        h('span', { className: 'ac-menuitem-icon' }, h(TrashIcon, { size: 13 })),
+        h('span', null, t('menuDelete')),
+        h('span', { style: { fontSize: 11, opacity: 0.6 } }, t('menuDeleteHint')),
+      )
     }
 
     // ── 主面板 ──────────────────────────────────────────────────────────
@@ -258,6 +452,14 @@ window.__ModuleLoader__.load({
           return t('moved', data.moved?.length ?? 0) + (failed ? t('failedN', failed) : '')
         })
 
+      // 批量：一次把当前所有归档会话移入回收站（不需要逐个勾选）
+      const doMoveAllToTrash = () =>
+        run(async () => {
+          const data = await callApi('delete', { all: true })
+          const failed = data.failed?.length ?? 0
+          return t('bulkDone', data.moved?.length ?? 0) + (failed ? t('failedN', failed) : '')
+        })
+
       const doRestore = () =>
         run(async () => {
           const ids = [...selected]
@@ -278,15 +480,18 @@ window.__ModuleLoader__.load({
           ? t('confirmTrash', selected.size)
           : confirm === 'restore'
             ? `${t('restore')} ${selected.size}?`
-            : confirm === 'purge'
-              ? t('confirmPurge', selected.size)
-              : confirm === 'purgeAll'
-                ? t('confirmPurgeAll', state.trash.length)
-                : ''
-      const confirmDanger = confirm === 'trash' || confirm === 'purge' || confirm === 'purgeAll'
+            : confirm === 'trashAll'
+              ? t('confirmTrashAll', state.archived.length)
+              : confirm === 'purge'
+                ? t('confirmPurge', selected.size)
+                : confirm === 'purgeAll'
+                  ? t('confirmPurgeAll', state.trash.length)
+                  : ''
+      const confirmDanger = confirm === 'trash' || confirm === 'trashAll' || confirm === 'purge' || confirm === 'purgeAll'
 
       const onConfirm = () => {
         if (confirm === 'trash') void doMoveToTrash()
+        else if (confirm === 'trashAll') void doMoveAllToTrash()
         else if (confirm === 'restore') void doRestore()
         else if (confirm === 'purge') void doPurge(false)
         else if (confirm === 'purgeAll') void doPurge(true)
@@ -449,6 +654,19 @@ window.__ModuleLoader__.load({
                 },
                 t('restore'),
               ),
+          tab === 'archived'
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'ac-btn',
+                  disabled: busy || state.archived.length === 0,
+                  title: t('bulkAll'),
+                  onClick: () => setConfirm('trashAll'),
+                },
+                `${t('bulkAll')} (${state.archived.length})`,
+              )
+            : null,
           tab === 'trash'
             ? h(
                 'button',
@@ -503,6 +721,22 @@ window.__ModuleLoader__.load({
               label: () => (locale === 'en' ? EN.sectionLabel : ZH.sectionLabel),
             },
             ArchiveCleanerPanel,
+          ),
+        )
+
+        // 会话行尾的删除按钮（只对已归档会话出现）
+        slots.inject('sidebar.workspaces.session.row.action', () =>
+          slots.register(
+            { name: 'sidebar.workspaces.session.row.action', id: 'archive-trash-delete', order: 150 },
+            SessionRowDeleteAction,
+          ),
+        )
+
+        // “...” 菜单里的一行（只对已归档会话出现）
+        slots.inject('sidebar.workspaces.session.menu.item', () =>
+          slots.register(
+            { name: 'sidebar.workspaces.session.menu.item', id: 'archive-trash-menu-delete', order: 410 },
+            SessionMenuDeleteItem,
           ),
         )
       },

@@ -322,6 +322,47 @@ console.log('16) delete —— 非归档会话也能删')
   check('meta 有 cwd（非归档会话也补上了）', typeof entry?.cwd === 'string', entry)
 }
 
+console.log('17) delete —— 多选批量（勾选 N 个，非全选）')
+{
+  const A = 'session-aaa11111-1111-1111-1111-111111111111'
+  const B = 'session-bbb22222-2222-2222-2222-222222222222'
+  const C = 'session-ccc33333-3333-3333-3333-333333333333'
+  const da = await makeSession(A, 'E:/fake/workspace', 'a'.repeat(30))
+  const db = await makeSession(B, 'E:/fake/workspace', 'b'.repeat(30))
+  await makeSession(C, 'E:/fake/workspace', 'c'.repeat(30))
+  archived.add(A)
+  archived.add(B)
+  archived.add(C)
+
+  const before = (await request('list')).body.trash.length
+  // 只勾 A 和 B，C 留着
+  const r = await request('delete', { sessionIds: [A, B] })
+  check('返回 200', r.status === 200, r)
+  check('moved 2 个', r.body.moved?.length === 2, r.body)
+  check('A 的目录已消失', !(await fs.stat(da).catch(() => null)))
+  check('B 的目录已消失', !(await fs.stat(db).catch(() => null)))
+  const list = await request('list')
+  check('C 仍在磁盘上', (await fs.stat(path.join(TMP, 'sessions', CWD_KEY, C)).catch(() => null)) !== null)
+  check('C 仍在归档集合里', archived.has(C))
+  check('回收站增加 2 条', list.body.trash.length === before + 2, { before, after: list.body.trash.length })
+  check('A、B 已从归档集合摘除', !archived.has(A) && !archived.has(B))
+  // 清理 C
+  await request('delete', { sessionIds: [C] })
+}
+
+console.log('18) delete —— 超出上限的批量请求被截断')
+{
+  const many = []
+  for (let i = 0; i < 3; i++) {
+    const id = `session-bulk${i}000-0000-0000-0000-000000000000`
+    await makeSession(id, 'E:/fake/workspace', 'z'.repeat(20))
+    many.push(id)
+  }
+  const r = await request('delete', { sessionIds: many })
+  check('moved 3 个', r.body.moved?.length === 3, r.body)
+  check('truncated 标记为 false（未超上限）', r.body.truncated === false, r.body.truncated)
+}
+
 await fs.rm(TMP, { recursive: true, force: true })
 console.log('')
 console.log(failures === 0 ? '全部通过 ✓' : `${failures} 项失败 ✗`)

@@ -28,6 +28,9 @@ window.__ModuleLoader__.load({
 .ac-btn.danger:hover:not(:disabled){background:var(--dsw-alias-state-error-primary);color:#fff}
 .ac-btn.ghost{border-color:transparent;background:transparent;color:var(--dsw-alias-label-secondary)}
 .ac-btn.ghost:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2)}
+.ac-count{font-size:12px;color:var(--dsw-alias-accent);background:color-mix(in srgb,var(--dsw-alias-accent) 14%,transparent);
+  border:1px solid color-mix(in srgb,var(--dsw-alias-accent) 40%,transparent);
+  border-radius:999px;padding:4px 11px;white-space:nowrap}
 .ac-list{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}
 .ac-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);min-height:44px}
 .ac-row:first-child{border-top:0}
@@ -79,13 +82,17 @@ window.__ModuleLoader__.load({
       tabTrash: '回收站',
       selectAll: '全选',
       clearSel: '取消选择',
+      invertSel: '反选',
       refresh: '刷新',
       loading: '读取中…',
       moveToTrash: '移入回收站 🧹',
       restore: '还原 💊',
+      moveToTrashSelected: '把选中的会话移入回收站',
+      restoreSelected: '把选中的条目从回收站还原',
       purgeSelected: '彻底删除 🔥',
       purgeAll: '清空回收站 🔥',
       confirmTrash: (n) => `把 ${n} 个会话移进回收站？放心，之后还能还原。`,
+      confirmRestore: (n) => `把 ${n} 个会话从回收站还原？目标位置被占用会明确拒绝。`,
       confirmPurge: (n) => `彻底删除 ${n} 项，删了就真没了。确定？`,
       confirmPurgeAll: (n) => `清空回收站里全部 ${n} 项，删了就真没了。确定？`,
       yes: '确认',
@@ -125,13 +132,17 @@ window.__ModuleLoader__.load({
       tabTrash: 'Trash',
       selectAll: 'Select all',
       clearSel: 'Clear',
+      invertSel: 'Invert',
       refresh: 'Refresh',
       loading: 'Loading…',
       moveToTrash: 'Move to trash 🧹',
       restore: 'Restore 💊',
+      moveToTrashSelected: 'Move the selected sessions to the trash',
+      restoreSelected: 'Restore the selected entries from the trash',
       purgeSelected: 'Delete forever 🔥',
       purgeAll: 'Empty trash 🔥',
       confirmTrash: (n) => `Move ${n} session(s) to trash? You can always restore them later.`,
+      confirmRestore: (n) => `Restore ${n} session(s) from the trash? A taken target is refused explicitly.`,
       confirmPurge: (n) => `Permanently delete ${n} item(s). Gone means gone. Continue?`,
       confirmPurgeAll: (n) => `Empty all ${n} item(s) from the trash. Gone means gone. Continue?`,
       yes: 'Confirm',
@@ -380,6 +391,16 @@ window.__ModuleLoader__.load({
       }
       const allSelected = rows.length > 0 && selected.size === rows.length
       const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rows.map(keyOf)))
+      // 反选：选中没被选中的那些
+      const invertAll = () =>
+        setSelected((prev) => {
+          const next = new Set()
+          for (const row of rows) {
+            const key = keyOf(row)
+            if (!prev.has(key)) next.add(key)
+          }
+          return next
+        })
 
       const run = async (fn, successText) => {
         setBusy(true)
@@ -432,7 +453,7 @@ window.__ModuleLoader__.load({
         confirm === 'trash'
           ? t('confirmTrash', selected.size)
           : confirm === 'restore'
-            ? `${t('restore')} ${selected.size}?`
+            ? t('confirmRestore', selected.size)
             : confirm === 'trashAll'
               ? t('confirmTrashAll', state.archived.length)
               : confirm === 'purge'
@@ -454,6 +475,14 @@ window.__ModuleLoader__.load({
         () => state.archived.reduce((sum, item) => sum + (Number(item.bytes) || 0), 0),
         [state.archived],
       )
+      // 选中项占用的空间（多选时告诉用户这一批有多大）
+      const selectedBytes = useMemo(() => {
+        let sum = 0
+        for (const row of rows) {
+          if (selected.has(keyOf(row))) sum += Number(row.bytes) || 0
+        }
+        return sum
+      }, [rows, selected])
 
       return h(
         'div',
@@ -501,6 +530,20 @@ window.__ModuleLoader__.load({
                 allSelected ? t('clearSel') : t('selectAll'),
               )
             : null,
+          rows.length > 1
+            ? h(
+                'button',
+                { type: 'button', className: 'ac-btn ghost', onClick: invertAll, disabled: busy },
+                t('invertSel'),
+              )
+            : null,
+          selected.size > 0
+            ? h(
+                'span',
+                { className: 'ac-count' },
+                `${t('selectedN', selected.size)}${selectedBytes > 0 ? ` · ${formatBytes(selectedBytes)}` : ''}`,
+              )
+            : null,
           h('button', { type: 'button', className: 'ac-btn ghost', onClick: () => void load(), disabled: busy || state.status === 'loading' }, t('refresh')),
         ),
         state.status === 'error'
@@ -508,7 +551,6 @@ window.__ModuleLoader__.load({
           : null,
         state.missingRegistry ? h('div', { className: 'ac-msg warn' }, t('noRegistry')) : null,
         notice ? h('div', { className: `ac-msg ${notice.kind}`, role: 'status' }, notice.text) : null,
-        selected.size > 0 ? h('p', { className: 'ac-hint' }, t('selectedN', selected.size)) : null,
         state.status === 'loading' && rows.length === 0
           ? h('div', { className: 'ac-empty' }, h('span', { className: 'ac-empty-emoji' }, '⏳'), h('span', null, t('loading')))
           : rows.length === 0
@@ -593,9 +635,10 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'ac-btn danger',
                   disabled: busy || selected.size === 0,
+                  title: t('moveToTrashSelected'),
                   onClick: () => setConfirm('trash'),
                 },
-                t('moveToTrash'),
+                `${t('moveToTrash')} (${selected.size})`,
               )
             : h(
                 'button',
@@ -603,9 +646,10 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'ac-btn primary',
                   disabled: busy || selected.size === 0,
+                  title: t('restoreSelected'),
                   onClick: () => setConfirm('restore'),
                 },
-                t('restore'),
+                `${t('restore')} (${selected.size})`,
               ),
           tab === 'archived'
             ? h(

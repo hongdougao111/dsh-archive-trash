@@ -33,16 +33,31 @@ DeepSeek Harness 的「归档」很温柔：从侧边栏消失，文件原地不
 
 ## 安装 📦
 
+**方式一 · npm（推荐）**
+
 ```sh
 dsh plugin --profile web add dsh-archive-trash
 ```
 
 桌面端把 `web` 换成 `desktop`。
 
-或者下 [Release 里的预构建 tarball](https://github.com/hongdougao111/dsh-archive-trash/releases/latest/download/dsh-archive-trash-0.3.0.tgz)，本地装，免构建授权：
+**方式二 · 下载预构建包**（免构建授权）
+
+| 格式 | 链接 | 用途 |
+| --- | --- | --- |
+| `.tgz` | [dsh-archive-trash-0.4.0.tgz](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.4.0/dsh-archive-trash-0.4.0.tgz) | 给 `dsh plugin add` 吃 |
+| `.zip` | [dsh-archive-trash-0.4.0.zip](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.4.0/dsh-archive-trash-0.4.0.zip) | 手动解压丢进 `node_modules` |
+
+tgz 本地装：
 
 ```sh
-dsh plugin --profile web add ./dsh-archive-trash-0.3.2.tgz
+dsh plugin --profile web add ./dsh-archive-trash-0.4.0.tgz
+```
+
+zip 手动装：解压出 `dsh-archive-trash/` 整块，粘进 profile 的 `node_modules/` 里，再在 profile 的 `cordis.yml` 里启用（zip 里多带了 `selftest.mjs`，装完可以自己跑一遍验证）：
+
+```sh
+cd <profile>/node_modules/dsh-archive-trash && node selftest.mjs
 ```
 
 > 也可以直接在 DSH 里点 **设置 → 插件 → + 添加插件**，把 `dsh-archive-trash` 粘进去 🖱️

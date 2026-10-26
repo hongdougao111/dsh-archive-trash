@@ -1,3 +1,16 @@
 node_modules/
 *.log
 .DS_Store
+
+# 构建产物：只作为 Release 资产分发，不进仓库
+*.tgz
+*.zip
+
+# 宣传片渲染中间产物
+promo/v*/out/
+promo/v*/smoke/
+promo/v*/qc/
+promo/v*/diag/
+promo/v*/chk/
+promo/v*/voice_tmp/
+*.wav

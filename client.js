@@ -28,8 +28,8 @@ window.__ModuleLoader__.load({
 .ac-btn.danger:hover:not(:disabled){background:var(--dsw-alias-state-error-primary);color:#fff}
 .ac-btn.ghost{border-color:transparent;background:transparent;color:var(--dsw-alias-label-secondary)}
 .ac-btn.ghost:hover:not(:disabled){color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2)}
-.ac-count{font-size:12px;color:var(--dsw-alias-accent);background:color-mix(in srgb,var(--dsw-alias-accent) 14%,transparent);
-  border:1px solid color-mix(in srgb,var(--dsw-alias-accent) 40%,transparent);
+.ac-count{font-size:12px;color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 14%,transparent);
+  border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 40%,transparent);
   border-radius:999px;padding:4px 11px;white-space:nowrap}
 .ac-list{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}
 .ac-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid var(--dsw-alias-border-l1);min-height:44px}

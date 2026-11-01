@@ -180,6 +180,41 @@ async function listArchived(ctx) {
 }
 
 /**
+ * 让前端的会话列表重新对齐一次。
+ *
+ * 各家版本的服务形状不一样，这里按能力探测而不是按版本号：
+ *
+ *   DSH <= 0.2.0     sessions.refresh()   —— 旧版有，直接调
+ *   DSH >= 0.2.1     sessions.list()      —— refresh 已移除，但 list() 会走一遍
+ *                                            持久化重建
+ *   sessionQuery.listSessions()           —— 两版都在的底层查询
+ *
+ * 全都拿不到就静默跳过：主通路是上面刚发的事件，这一步只是兜底。
+ */
+async function refreshSessionList(ctx) {
+  const sessions = ctx.get('sessions')
+  if (sessions) {
+    for (const method of ['refresh', 'reload', 'list']) {
+      if (typeof sessions[method] !== 'function') continue
+      try {
+        await sessions[method]()
+        return true
+      } catch {
+        /* 换下一个 */
+      }
+    }
+  }
+  const query = ctx.get('sessionQuery')
+  if (query && typeof query.listSessions === 'function') {
+    try {
+      await query.listSessions()
+      return true
+    } catch {}
+  }
+  return false
+}
+
+/**
  * 让这批会话从「已归档集合」和「前端列表」里同时消失。
  *
  * 关键动作是 **emit `api-session/removed`** —— 这是 DSH 自己的移除通道：
@@ -217,10 +252,7 @@ async function forgetSessions(ctx, sessionIds) {
   }
 
   // ② 再拉一次基线兜底：万一某个前端没订阅到事件，重拉也能丢掉这些 id
-  try {
-    const sessions = ctx.get('sessions')
-    if (sessions && typeof sessions.refresh === 'function') await sessions.refresh()
-  } catch {}
+  await refreshSessionList(ctx)
 }
 
 /**
@@ -354,10 +386,7 @@ async function announceRestored(ctx, headers) {
     } catch {}
   }
   // 再拉一次基线兜底：确保 projections / updatedAt 跟真实磁盘状态对齐
-  try {
-    const sessions = ctx.get('sessions')
-    if (sessions && typeof sessions.refresh === 'function') await sessions.refresh()
-  } catch {}
+  await refreshSessionList(ctx)
 }
 
 /** 从回收站还原。 */
@@ -468,18 +497,24 @@ function rejectRequest(ctx, req) {
   }
   if (String(req.headers['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') return deny(403)
   if (!isLoopback) {
-    // 非回环：交给宿主的 connection 栅栏判（它知道 --trusted-host 声明了谁）
+    // 非回环地址：请宿主的能力栅栏判一次。
+    //
+    // DSH 0.2.0 及更早：connection.requestRejection(req) 返回状态码或 falsy
+    // DSH 0.2.1 及以后：这个方法整个没了 —— 请求校验交给了 api-gateway。
+    //   那种情况下我们无从得知绑定策略（比如 --trusted-host 声明了谁），
+    //   所以保持默认拒绝：宁可让远程访问走官方网关，也不自己放行。
     const connection = ctx.get('connection')
-    if (connection && typeof connection.requestRejection === 'function') {
+    const fence = connection && connection.requestRejection
+    if (typeof fence === 'function') {
       try {
-        const code = connection.requestRejection(req)
+        const code = fence.call(connection, req)
         if (code !== undefined && code !== null && code !== false) return deny(typeof code === 'number' ? code : 403)
+        return null
       } catch {
         return deny(403)
       }
-    } else {
-      return deny(403)
     }
+    return deny(403)
   }
   return null
 }

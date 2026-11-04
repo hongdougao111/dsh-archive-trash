@@ -17,6 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { scanEmptySessions, EMPTY_SIZE_LIMIT } from './empty-scan.js'
+import { scanStraySessions } from './stray-scan.js'
 
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const SESSIONS_ROOT = path.join(DSH_HOME, 'sessions')
@@ -213,6 +214,28 @@ async function refreshSessionList(ctx) {
     } catch {}
   }
   return false
+}
+
+/**
+ * 收集所有工作区记在册的 sessionId。
+ *
+ * DSH 的侧边栏按 Workspace 的 sessionIds 分组渲染。不在任何工作区里的会话
+ * 在界面上完全看不见，但文件还留在 $DSH_HOME/sessions —— 这类叫「游离会话」。
+ *
+ * @returns {Set<string>|null} null 表示拿不到注册表（调用方须放弃扫描，不能当成「全都没归属」）
+ */
+function collectTrackedSessionIds(ctx) {
+  const registry = ctx.get('workspaceRegistry')
+  if (!registry || typeof registry.list !== 'function') return null
+  const tracked = new Set()
+  try {
+    for (const workspace of registry.list()) {
+      for (const id of workspace?.sessionIds ?? []) tracked.add(String(id))
+    }
+  } catch {
+    return null
+  }
+  return tracked
 }
 
 /**
@@ -600,6 +623,54 @@ export function apply(ctx) {
               skipped: result.skipped.length,
               limit: Number(body.limit) > 0 ? Number(body.limit) : EMPTY_SIZE_LIMIT,
             })
+          }
+          case 'scanStray': {
+            // 游离会话：磁盘上有、但没被任何工作区记账
+            const tracked = collectTrackedSessionIds(ctx)
+            if (tracked === null) {
+              return sendJson(res, 200, { ok: true, items: [], skipped: 0, unsupported: true })
+            }
+            const index = await indexSessionDirs()
+            const result = await scanStraySessions(index, tracked, {
+              olderThanDays: Number(body.olderThanDays) > 0 ? Number(body.olderThanDays) : 0,
+            })
+            return sendJson(res, 200, {
+              ok: true,
+              items: result.items,
+              skipped: result.skipped.length,
+              tracked: tracked.size,
+              total: index.size,
+            })
+          }
+          case 'deleteStray': {
+            // 二次扫描做闸门：只删「确实没有工作区归属」的
+            const tracked = collectTrackedSessionIds(ctx)
+            if (tracked === null) {
+              return sendJson(res, 400, { ok: false, error: 'no-registry' })
+            }
+            const index = await indexSessionDirs()
+            const scan = await scanStraySessions(index, tracked)
+            const strayIds = new Set(scan.items.map((it) => it.sessionId))
+
+            const asked =
+              body.all === true
+                ? [...strayIds]
+                : Array.isArray(body.sessionIds)
+                  ? body.sessionIds.map(String)
+                  : []
+            const targets = asked.filter((id) => strayIds.has(id))
+            const rejected = asked.filter((id) => !strayIds.has(id))
+
+            if (body.all !== true && targets.length === 0) {
+              return sendJson(res, 400, { ok: false, error: 'none-qualified', rejected })
+            }
+            if (targets.length === 0) {
+              return sendJson(res, 200, { ok: true, moved: [], failed: [], truncated: false, rejected: [] })
+            }
+
+            const result = await moveToTrash(ctx, targets)
+            await forgetSessions(ctx, result.moved.map((m) => m.sessionId))
+            return sendJson(res, 200, { ok: true, ...result, rejected })
           }
           case 'deleteEmpty': {
             // 二次扫描做闸门：只删「确实判定为空」的，防止前端传错 id 误删有内容的会话

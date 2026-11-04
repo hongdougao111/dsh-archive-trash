@@ -16,6 +16,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
+import { scanEmptySessions, EMPTY_SIZE_LIMIT } from './empty-scan.js'
 
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const SESSIONS_ROOT = path.join(DSH_HOME, 'sessions')
@@ -306,7 +307,7 @@ async function describeSessions(ctx, ids) {
 }
 
 /** 把若干会话移进回收站。 */
-async function moveToTrash(ctx, sessionIds) {
+async function moveToTrash(ctx, sessionIds, opts = {}) {
   const ids = sessionIds.slice(0, MAX_BATCH).map(String)
   const index = await indexSessionDirs()
   // 不限归档状态：会话行上的删除按钮对普通会话也生效
@@ -335,7 +336,9 @@ async function moveToTrash(ctx, sessionIds) {
             sessionId: id,
             originalPath: dir,
             cwd: known.get(id)?.cwd ?? '',
-            title: known.get(id)?.title ?? '',
+            // opts.titleOverride === null 时写 null（空会话本来就没有标题）
+            title:
+              opts.titleOverride === null ? null : (known.get(id)?.title ?? ''),
             deletedAt: Date.now(),
           },
           null,
@@ -566,6 +569,62 @@ export function apply(ctx) {
             // 只做一致性维护：清掉归档集合里指向已不存在会话的幽灵 id
             const archived = await listArchived(ctx)
             return sendJson(res, 200, { ok: true, pruned: archived.prunedOrphans ?? 0 })
+          }
+          case 'scanEmpty': {
+            // 扫描全部会话（不限归档状态），找出从未发过消息的那些
+            const index = await indexSessionDirs()
+            const result = await scanEmptySessions(index, {
+              limit: Number(body.limit) > 0 ? Number(body.limit) : EMPTY_SIZE_LIMIT,
+            })
+            // 补上 cwd（describeSessions 返回 Map<sessionId, {title, cwd}>）
+            const described = await describeSessions(
+              ctx,
+              result.items.map((it) => it.sessionId),
+            )
+            const items = result.items.map((it) => {
+              const m = described.get(it.sessionId) ?? {}
+              return {
+                sessionId: it.sessionId,
+                // 空会话从没发过消息，本来就没有标题 —— 统一给 null
+                title: null,
+                cwd: m.cwd ?? '',
+                size: it.size,
+                mtime: it.mtime,
+                eventCount: it.eventCount,
+                types: it.types,
+              }
+            })
+            return sendJson(res, 200, {
+              ok: true,
+              items,
+              skipped: result.skipped.length,
+              limit: Number(body.limit) > 0 ? Number(body.limit) : EMPTY_SIZE_LIMIT,
+            })
+          }
+          case 'deleteEmpty': {
+            // 二次扫描做闸门：只删「确实判定为空」的，防止前端传错 id 误删有内容的会话
+            const index = await indexSessionDirs()
+            const scan = await scanEmptySessions(index)
+            const emptyIds = new Set(scan.items.map((it) => it.sessionId))
+
+            const asked =
+              body.all === true
+                ? [...emptyIds]
+                : (Array.isArray(body.sessionIds) ? body.sessionIds.map(String) : [])
+            const targets = asked.filter((id) => emptyIds.has(id))
+            const rejected = asked.filter((id) => !emptyIds.has(id))
+
+            // 明确指定了 id 却一个都不合格 → 400，让前端能提示
+            if (body.all !== true && targets.length === 0) {
+              return sendJson(res, 400, { ok: false, error: 'none-qualified', rejected })
+            }
+            if (targets.length === 0) {
+              return sendJson(res, 200, { ok: true, moved: [], failed: [], truncated: false, rejected: [] })
+            }
+
+            const result = await moveToTrash(ctx, targets, { titleOverride: null })
+            await forgetSessions(ctx, result.moved.map((m) => m.sessionId))
+            return sendJson(res, 200, { ok: true, ...result, rejected })
           }
           default:
             return sendJson(res, 400, { ok: false, error: `unknown-action:${action}` })

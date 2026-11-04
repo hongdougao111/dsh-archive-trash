@@ -80,6 +80,15 @@ window.__ModuleLoader__.load({
       desc: '归档只是把会话藏起来，日志还赖在硬盘上不走 🧟 在这里给它一个体面的下场：移进回收站（还能捡回来），或者彻底删掉。只动会话日志，你的工作目录一根头发都不碰。',
       tabArchived: '已归档',
       tabTrash: '回收站',
+      tabEmpty: '空会话',
+      emptyHint: '这些会话从没发过消息，只有一条会话头。删掉它们不影响任何对话记录。',
+      scanEmpty: '重新扫描 🔍',
+      scanning: '扫描中…',
+      emptyNone: '没有空会话 ✨',
+      emptyNoneHint: '干净得很，没有从没说过话的会话。',
+      emptySkipped: (n) => `${n} 个会话无法判定（日志损坏或过大），已跳过`,
+      confirmEmpty: (n) => `把 ${n} 个空会话移进回收站？它们从没发过消息，之后仍可还原。`,
+      emptyTag: '空',
       selectAll: '全选',
       clearSel: '取消选择',
       invertSel: '反选',
@@ -130,6 +139,15 @@ window.__ModuleLoader__.load({
       desc: 'Archiving only hides a session — its log keeps squatting on your disk forever 🧟 Give it a proper send-off: move it to a recoverable trash, or delete it for good. Only session logs are touched; your working directories stay untouched.',
       tabArchived: 'Archived',
       tabTrash: 'Trash',
+      tabEmpty: 'Empty',
+      emptyHint: 'These sessions never sent a message — only a header. Deleting them loses no conversation.',
+      scanEmpty: 'Rescan 🔍',
+      scanning: 'Scanning…',
+      emptyNone: 'No empty sessions ✨',
+      emptyNoneHint: 'All clean — nothing that never spoke.',
+      emptySkipped: (n) => `${n} session(s) could not be judged (corrupt or too large) and were skipped`,
+      confirmEmpty: (n) => `Move ${n} empty session(s) to trash? They never sent a message, and you can still restore them.`,
+      emptyTag: 'empty',
       selectAll: 'Select all',
       clearSel: 'Clear',
       invertSel: 'Invert',
@@ -345,7 +363,16 @@ window.__ModuleLoader__.load({
     // ── 主面板 ──────────────────────────────────────────────────────────
     function ArchiveCleanerPanel() {
       const [tab, setTab] = useState('archived')
-      const [state, setState] = useState({ status: 'loading', archived: [], trash: [], missingRegistry: false, error: null })
+      const [scanning, setScanning] = useState(false)
+      const [state, setState] = useState({
+        status: 'loading',
+        archived: [],
+        trash: [],
+        empty: [],
+        emptySkipped: 0,
+        missingRegistry: false,
+        error: null,
+      })
       const [selected, setSelected] = useState(() => new Set())
       const [busy, setBusy] = useState(false)
       const [notice, setNotice] = useState(null)
@@ -357,15 +384,25 @@ window.__ModuleLoader__.load({
         setState((prev) => ({ ...prev, status: 'loading' }))
         try {
           const data = await callApi('list')
-          setState({
+          setState((prev) => ({
             status: 'ready',
             archived: Array.isArray(data.items) ? data.items : [],
             trash: Array.isArray(data.trash) ? data.trash : [],
+            empty: prev.empty,
+            emptySkipped: prev.emptySkipped,
             missingRegistry: data.missingRegistry === true,
             error: null,
-          })
+          }))
         } catch (error) {
-          setState({ status: 'error', archived: [], trash: [], missingRegistry: false, error: String(error?.message ?? error) })
+          setState((prev) => ({
+            status: 'error',
+            archived: [],
+            trash: [],
+            empty: prev.empty,
+            emptySkipped: prev.emptySkipped,
+            missingRegistry: false,
+            error: String(error?.message ?? error),
+          }))
         }
       }, [])
 
@@ -378,7 +415,8 @@ window.__ModuleLoader__.load({
         setConfirm(null)
       }, [tab])
 
-      const rows = tab === 'archived' ? state.archived : state.trash
+      const rows =
+        tab === 'archived' ? state.archived : tab === 'trash' ? state.trash : state.empty
       const keyOf = (row) => (tab === 'archived' ? row.sessionId : row.entryId)
 
       const toggle = (key) => {
@@ -426,6 +464,34 @@ window.__ModuleLoader__.load({
           return t('moved', data.moved?.length ?? 0) + (failed ? t('failedN', failed) : '')
         })
 
+      // 扫描空会话（从没发过消息的）
+      const doScanEmpty = useCallback(async () => {
+        setScanning(true)
+        try {
+          const data = await callApi('scanEmpty')
+          const items = Array.isArray(data.items) ? data.items : []
+          setState((prev) => ({ ...prev, empty: items, emptySkipped: data.skipped ?? 0 }))
+          setSelected(new Set())
+        } catch (error) {
+          setNotice({ kind: 'err', text: String(error?.message ?? error) })
+        } finally {
+          setScanning(false)
+        }
+      }, [])
+
+      // 把选中的空会话移入回收站
+      const doDeleteEmpty = () =>
+        run(async () => {
+          const ids = [...selected]
+          const data = await callApi('deleteEmpty', { sessionIds: ids })
+          const failed = data.failed?.length ?? 0
+          const rejected = data.rejected?.length ?? 0
+          let msg = t('moved', data.moved?.length ?? 0)
+          if (failed) msg += t('failedN', failed)
+          if (rejected) msg += t('emptySkipped', rejected)
+          return msg
+        })
+
       // 批量：一次把当前所有归档会话移入回收站（不需要逐个勾选）
       const doMoveAllToTrash = () =>
         run(async () => {
@@ -450,8 +516,10 @@ window.__ModuleLoader__.load({
         })
 
       const confirmText =
-        confirm === 'trash'
-          ? t('confirmTrash', selected.size)
+        confirm === 'empty'
+          ? t('confirmEmpty', selected.size)
+          : confirm === 'trash'
+            ? t('confirmTrash', selected.size)
           : confirm === 'restore'
             ? t('confirmRestore', selected.size)
             : confirm === 'trashAll'
@@ -461,10 +529,16 @@ window.__ModuleLoader__.load({
                 : confirm === 'purgeAll'
                   ? t('confirmPurgeAll', state.trash.length)
                   : ''
-      const confirmDanger = confirm === 'trash' || confirm === 'trashAll' || confirm === 'purge' || confirm === 'purgeAll'
+      const confirmDanger =
+        confirm === 'empty' ||
+        confirm === 'trash' ||
+        confirm === 'trashAll' ||
+        confirm === 'purge' ||
+        confirm === 'purgeAll'
 
       const onConfirm = () => {
-        if (confirm === 'trash') void doMoveToTrash()
+        if (confirm === 'empty') void doDeleteEmpty()
+        else if (confirm === 'trash') void doMoveToTrash()
         else if (confirm === 'trashAll') void doMoveAllToTrash()
         else if (confirm === 'restore') void doRestore()
         else if (confirm === 'purge') void doPurge(false)
@@ -521,6 +595,20 @@ window.__ModuleLoader__.load({
               },
               `${t('tabTrash')} (${state.trash.length})`,
             ),
+            h(
+              'button',
+              {
+                type: 'button',
+                role: 'tab',
+                className: 'ac-tab',
+                'aria-selected': String(tab === 'empty'),
+                onClick: () => {
+                  setTab('empty')
+                  if (state.empty.length === 0 && !scanning) void doScanEmpty()
+                },
+              },
+              `${t('tabEmpty')} (${state.empty.length})`,
+            ),
           ),
           h('span', { className: 'ac-spacer' }),
           rows.length > 0
@@ -544,7 +632,18 @@ window.__ModuleLoader__.load({
                 `${t('selectedN', selected.size)}${selectedBytes > 0 ? ` · ${formatBytes(selectedBytes)}` : ''}`,
               )
             : null,
-          h('button', { type: 'button', className: 'ac-btn ghost', onClick: () => void load(), disabled: busy || state.status === 'loading' }, t('refresh')),
+          tab === 'empty'
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'ac-btn ghost',
+                  onClick: () => void doScanEmpty(),
+                  disabled: busy || scanning,
+                },
+                scanning ? t('scanning') : t('scanEmpty'),
+              )
+            : h('button', { type: 'button', className: 'ac-btn ghost', onClick: () => void load(), disabled: busy || state.status === 'loading' }, t('refresh')),
         ),
         state.status === 'error'
           ? h('div', { className: 'ac-msg err', role: 'alert' }, t('loadFailed', state.error || ''))
@@ -557,9 +656,29 @@ window.__ModuleLoader__.load({
             ? h(
                 'div',
                 { className: 'ac-empty' },
-                h('span', { className: 'ac-empty-emoji' }, tab === 'archived' ? '🗂️' : '🗑️'),
-                h('span', null, tab === 'archived' ? t('emptyArchived') : t('emptyTrash')),
-                h('span', { className: 'ac-hint' }, tab === 'archived' ? t('emptyArchivedHint') : t('emptyTrashHint')),
+                h(
+                  'span',
+                  { className: 'ac-empty-emoji' },
+                  tab === 'archived' ? '🗂️' : tab === 'trash' ? '🗑️' : '✨',
+                ),
+                h(
+                  'span',
+                  null,
+                  tab === 'archived'
+                    ? t('emptyArchived')
+                    : tab === 'trash'
+                      ? t('emptyTrash')
+                      : t('emptyNone'),
+                ),
+                h(
+                  'span',
+                  { className: 'ac-hint' },
+                  tab === 'archived'
+                    ? t('emptyArchivedHint')
+                    : tab === 'trash'
+                      ? t('emptyTrashHint')
+                      : t('emptyNoneHint'),
+                ),
               )
             : h(
                 'div',
@@ -568,7 +687,12 @@ window.__ModuleLoader__.load({
                   const key = keyOf(row)
                   const checked = selected.has(key)
                   const title = String(row.title || '').trim()
-                  const when = tab === 'archived' ? row.createdAt : row.deletedAt
+                  const when =
+                    tab === 'archived'
+                      ? row.createdAt
+                      : tab === 'trash'
+                        ? row.deletedAt
+                        : row.mtime
                   return h(
                     'label',
                     { className: 'ac-row', role: 'listitem', key },
@@ -593,12 +717,17 @@ window.__ModuleLoader__.load({
                         h('span', { className: 'ac-mono' }, key),
                         row.cwd ? h('span', { title: row.cwd }, shortCwd(row.cwd)) : null,
                         h('span', null, formatDate(when)),
-                        row.bytes ? h('span', null, formatBytes(row.bytes)) : null,
+                        row.bytes
+                          ? h('span', null, formatBytes(row.bytes))
+                          : row.size
+                            ? h('span', null, formatBytes(row.size))
+                            : null,
                       ),
                     ),
                     tab === 'archived' && row.exists === false
                       ? h('span', { className: 'ac-tag warn' }, t('missing'))
                       : null,
+                    tab === 'empty' ? h('span', { className: 'ac-tag' }, t('emptyTag')) : null,
                   )
                 }),
               ),
@@ -628,7 +757,7 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'ac-bar' },
-          tab === 'archived'
+          tab === 'archived' || tab === 'empty'
             ? h(
                 'button',
                 {
@@ -636,7 +765,7 @@ window.__ModuleLoader__.load({
                   className: 'ac-btn danger',
                   disabled: busy || selected.size === 0,
                   title: t('moveToTrashSelected'),
-                  onClick: () => setConfirm('trash'),
+                  onClick: () => setConfirm(tab === 'empty' ? 'empty' : 'trash'),
                 },
                 `${t('moveToTrash')} (${selected.size})`,
               )

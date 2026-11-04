@@ -417,7 +417,8 @@ window.__ModuleLoader__.load({
 
       const rows =
         tab === 'archived' ? state.archived : tab === 'trash' ? state.trash : state.empty
-      const keyOf = (row) => (tab === 'archived' ? row.sessionId : row.entryId)
+      // 归档和空会话用 sessionId；只有回收站条目用 entryId
+      const keyOf = (row) => (tab === 'trash' ? row.entryId : row.sessionId)
 
       const toggle = (key) => {
         setSelected((prev) => {
@@ -553,7 +554,7 @@ window.__ModuleLoader__.load({
       const selectedBytes = useMemo(() => {
         let sum = 0
         for (const row of rows) {
-          if (selected.has(keyOf(row))) sum += Number(row.bytes) || 0
+          if (selected.has(keyOf(row))) sum += Number(row.bytes) || Number(row.size) || 0
         }
         return sum
       }, [rows, selected])

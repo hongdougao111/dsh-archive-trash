@@ -482,6 +482,61 @@ console.log('20) deleteEmpty —— 只删判定为空的，拒绝有内容的')
   await fs.rm(path.join(SESSIONS, CWD_KEY, D_DIALOG), { recursive: true, force: true })
 }
 
+console.log('21) scanStray —— 只扫没被工作区记账的会话')
+{
+  // 先清干净，避免前面用例留下的会话干扰
+  const cwdDir = path.join(SESSIONS, CWD_KEY)
+  for (const name of await fs.readdir(cwdDir)) {
+    if (name.startsWith('session-') && !archived.has(name)) {
+      // 保留，后面按需造
+    }
+  }
+
+  // 造三个会话：一个有归属、一个游离、一个超新
+  const S_TRACKED = 'session-57a00001-0000-0000-0000-000000000001'
+  const S_STRAY = 'session-57a00002-0000-0000-0000-000000000002'
+  await makeZstdSession(S_TRACKED, [
+    { type: 'session', version: 4, id: S_TRACKED, cwd: 'E:/fake/workspace', createdAt: Date.now() - 86400000 * 30 },
+    { type: 'user/message', text: 'hi' },
+  ])
+  await makeZstdSession(S_STRAY, [
+    { type: 'session', version: 4, id: S_STRAY, cwd: 'E:/fake/workspace', createdAt: Date.now() - 86400000 * 30 },
+    { type: 'user/message', text: 'hello' },
+  ])
+
+  // 让 S_TRACKED 有工作区归属
+  const ws = { id: 'ws-test', sessionIds: [S_TRACKED] }
+  registry.list = () => [ws]
+
+  const r = await request('scanStray')
+  check('scanStray 返回 200', r.status === 200, r)
+  const ids = new Set((r.body.items || []).map((i) => i.sessionId))
+
+  check('有归属的 → 不命中', !ids.has(S_TRACKED), [...ids])
+  check('游离的 → 命中', ids.has(S_STRAY), [...ids])
+  check('返回 tracked 计数', typeof r.body.tracked === 'number', r.body)
+  check('返回 total 计数', typeof r.body.total === 'number', r.body)
+  const strayItem = (r.body.items || []).find((i) => i.sessionId === S_STRAY)
+  check('游离会话带 dialogCount', strayItem?.dialogCount === 1, strayItem)
+  check('游离会话带 bytes', typeof strayItem?.bytes === 'number', strayItem)
+
+  // deleteStray：只删游离的
+  const r2 = await request('deleteStray', { sessionIds: [S_STRAY, S_TRACKED] })
+  check('混合请求返回 200', r2.status === 200, r2.body)
+  check('只删了游离的那个', r2.body.moved?.length === 1, r2.body)
+  check('有归属的进 rejected', r2.body.rejected?.includes(S_TRACKED), r2.body.rejected)
+  check('游离会话目录已消失', (await fs.stat(path.join(SESSIONS, CWD_KEY, S_STRAY)).catch(() => null)) === null)
+  check('有归属的仍在磁盘', (await fs.stat(path.join(SESSIONS, CWD_KEY, S_TRACKED)).catch(() => null)) !== null)
+
+  // 只传有归属的 → 400
+  const r3 = await request('deleteStray', { sessionIds: [S_TRACKED] })
+  check('只传有归属的 → 400', r3.status === 400, r3.body)
+  check('拒绝原因 none-qualified', r3.body.error === 'none-qualified', r3.body)
+
+  await fs.rm(path.join(SESSIONS, CWD_KEY, S_TRACKED), { recursive: true, force: true })
+  registry.list = () => []
+}
+
 await fs.rm(TMP, { recursive: true, force: true })
 console.log('')
 console.log(failures === 0 ? '全部通过 ✓' : `${failures} 项失败 ✗`)

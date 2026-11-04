@@ -11,6 +11,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
+import zlib from 'node:zlib'
 import { pathToFileURL } from 'node:url'
 
 const TMP = await fs.mkdtemp(path.join(os.tmpdir(), 'ac-selftest-'))
@@ -25,6 +26,22 @@ async function makeSession(id, cwd, payload) {
   const dir = path.join(SESSIONS, CWD_KEY, id)
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(path.join(dir, 'session.v4.jsonl.zstd'), payload)
+  return dir
+}
+
+/**
+ * 造一个「多帧 zstd」会话日志 —— 和真实环境一样，每行事件一帧。
+ * 这是 issue #1 特别强调的：只解第一帧会得到 1 行，必须逐帧解。
+ * @param {string} id sessionId
+ * @param {object[]} events 事件数组，每个元素会被 JSON.stringify 成一帧
+ */
+async function makeZstdSession(id, events) {
+  const dir = path.join(SESSIONS, CWD_KEY, id)
+  await fs.mkdir(dir, { recursive: true })
+  const frames = events.map((e) =>
+    zlib.zstdCompressSync(Buffer.from(JSON.stringify(e) + '\n', 'utf8')),
+  )
+  await fs.writeFile(path.join(dir, 'session.v4.jsonl.zstd'), Buffer.concat(frames))
   return dir
 }
 
@@ -361,6 +378,108 @@ console.log('18) delete —— 超出上限的批量请求被截断')
   const r = await request('delete', { sessionIds: many })
   check('moved 3 个', r.body.moved?.length === 3, r.body)
   check('truncated 标记为 false（未超上限）', r.body.truncated === false, r.body.truncated)
+}
+
+console.log('19) scanEmpty —— 六种会话的判定边界（issue #1）')
+{
+  // ① 纯头文件
+  const E_HEAD = 'session-e0011111-0000-0000-0000-000000000001'
+  await makeZstdSession(E_HEAD, [{ type: 'session', version: 4, id: E_HEAD }])
+
+  // ② 头 + 预设事件（仍算空）
+  const E_PRESET = 'session-e0022222-0000-0000-0000-000000000002'
+  await makeZstdSession(E_PRESET, [
+    { type: 'session', version: 4, id: E_PRESET },
+    { type: 'permission/preset', preset: 'default' },
+    { type: 'model/selection', model: 'x' },
+    { type: 'session/end-seed' },
+  ])
+
+  // ③ 头 + 系统消息（只有 system/message，按 issue 要求仍算空）
+  const E_SYSTEM = 'session-e0033333-0000-0000-0000-000000000003'
+  await makeZstdSession(E_SYSTEM, [
+    { type: 'session', version: 4, id: E_SYSTEM },
+    { type: 'system/message', text: 'welcome' },
+  ])
+
+  // ④ 头 + user 消息（有对话，不算空）
+  const E_USER = 'session-e0044444-0000-0000-0000-000000000004'
+  await makeZstdSession(E_USER, [
+    { type: 'session', version: 4, id: E_USER },
+    { type: 'user/message', text: 'hello' },
+  ])
+
+  // ⑤ 头 + assistant 消息（有对话，不算空）
+  const E_ASSIST = 'session-e0055555-0000-0000-0000-000000000005'
+  await makeZstdSession(E_ASSIST, [
+    { type: 'session', version: 4, id: E_ASSIST },
+    { type: 'assistant/message', text: 'hi' },
+  ])
+
+  // ⑥ 损坏日志（不是 zstd 也不是 JSON）—— 应跳过，不能当空会话删掉
+  const E_BROKEN = 'session-e0066666-0000-0000-0000-000000000006'
+  await makeSession(E_BROKEN, 'E:/fake/workspace', Buffer.from([0x00, 0x01, 0x02, 0x03]))
+
+  const r = await request('scanEmpty')
+  check('scanEmpty 返回 200', r.status === 200, r)
+  const ids = new Set((r.body.items || []).map((i) => i.sessionId))
+
+  check('① 纯头文件 → 命中', ids.has(E_HEAD), [...ids])
+  check('② 头+预设事件 → 命中', ids.has(E_PRESET), [...ids])
+  check('③ 头+系统消息 → 命中（system 不算对话）', ids.has(E_SYSTEM), [...ids])
+  check('④ 头+user 消息 → 不命中', !ids.has(E_USER), [...ids])
+  check('⑤ 头+assistant 消息 → 不命中', !ids.has(E_ASSIST), [...ids])
+  check('⑥ 损坏日志 → 不命中（跳过而非误判）', !ids.has(E_BROKEN), [...ids])
+
+  // 多帧解码验证：② 有 4 条事件，若只解第一帧会变成 1
+  const presetItem = (r.body.items || []).find((i) => i.sessionId === E_PRESET)
+  check('多帧解码正确（4 条事件而非 1 条）', presetItem?.eventCount === 4, presetItem)
+
+  // 标题为 null（空会话本来就没标题）
+  const headItem = (r.body.items || []).find((i) => i.sessionId === E_HEAD)
+  check('空会话 title 为 null', headItem?.title === null || headItem?.title === '', headItem)
+
+  // 清理：删掉这批测试会话，避免影响后续断言
+  for (const id of [E_HEAD, E_PRESET, E_SYSTEM, E_USER, E_ASSIST, E_BROKEN]) {
+    await fs.rm(path.join(SESSIONS, CWD_KEY, id), { recursive: true, force: true })
+  }
+}
+
+console.log('20) deleteEmpty —— 只删判定为空的，拒绝有内容的')
+{
+  const D_EMPTY = 'session-d0011111-0000-0000-0000-000000000001'
+  const D_DIALOG = 'session-d0022222-0000-0000-0000-000000000002'
+  await makeZstdSession(D_EMPTY, [{ type: 'session', version: 4, id: D_EMPTY }])
+  await makeZstdSession(D_DIALOG, [
+    { type: 'session', version: 4, id: D_DIALOG },
+    { type: 'user/message', text: 'real' },
+  ])
+
+  // 传一个有对话的 id → 应被拒绝
+  const r1 = await request('deleteEmpty', { sessionIds: [D_DIALOG] })
+  check('有对话的会话被拒绝（400）', r1.status === 400, r1.body)
+  check('拒绝原因 none-qualified', r1.body.error === 'none-qualified', r1.body)
+  check('目录仍在磁盘上', (await fs.stat(path.join(SESSIONS, CWD_KEY, D_DIALOG)).catch(() => null)) !== null)
+
+  // 混传：空的删掉，有对话的进 rejected
+  const r2 = await request('deleteEmpty', { sessionIds: [D_EMPTY, D_DIALOG] })
+  check('混合请求返回 200', r2.status === 200, r2.body)
+  check('只删了 1 个', r2.body.moved?.length === 1, r2.body)
+  check('有对话的被列入 rejected', Array.isArray(r2.body.rejected) && r2.body.rejected.includes(D_DIALOG), r2.body.rejected)
+  check('空会话目录已消失', (await fs.stat(path.join(SESSIONS, CWD_KEY, D_EMPTY)).catch(() => null)) === null)
+
+  // 进了回收站且能还原
+  const trash = (await request('list')).body.trash
+  const entry = trash.find((t) => t.sessionId === D_EMPTY)
+  check('空会话进了回收站', entry !== undefined, trash.map((t) => t.sessionId))
+  check('回收站 meta 的 title 为 null', entry?.title === null || entry?.title === '', entry)
+
+  if (entry) {
+    const r3 = await request('restore', { entryIds: [entry.entryId] })
+    check('空会话能还原', r3.status === 200 && r3.body.restored?.length === 1, r3.body)
+  }
+
+  await fs.rm(path.join(SESSIONS, CWD_KEY, D_DIALOG), { recursive: true, force: true })
 }
 
 await fs.rm(TMP, { recursive: true, force: true })

@@ -1,7 +1,7 @@
 {
   "name": "dsh-archive-trash",
-  "version": "0.5.1",
-  "description": "DSH 会话删除 🗑️ 任意会话行上一键删、多选批量清空、空会话扫描、可还原回收站；删和还原都立刻生效不用重启。",
+  "version": "0.6.0",
+  "description": "DSH 会话删除 🗑️ 任意会话行上一键删、多选批量清空、空会话与游离会话扫描、可还原回收站；删和还原都立刻生效不用重启。",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
@@ -26,12 +26,13 @@
     "index.js",
     "client.js",
     "empty-scan.js",
+    "stray-scan.js",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
     "README.md",
     "LICENSE",
-    "CHANGELOG-0.5.1.md"
+    "CHANGELOG-0.6.0.md"
   ],
   "dsh": {
     "bundle": {

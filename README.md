@@ -15,6 +15,7 @@ DeepSeek Harness 的「归档」很温柔：从侧边栏消失，文件原地不
 - **任意会话，行上直接删** — 鼠标划到会话行尾就冒出一个小垃圾桶 🗑️，点一下变 ✓/✕ 二选一。**不用先归档** 🎯
 - **立刻生效** — 删完会话马上从侧边栏消失，还原马上回来。不用重启 DSH ⚡
 - **正在跑的会话不给删** — 包括你此刻正打开的这个。按钮会变灰，鼠标悬停说明原因 🛡️
+- **游离会话清理** — 扫出所有「磁盘上有、但没有工作区归属」的会话，侧边栏根本看不见它们 🧭
 - **空会话清理** — 设置页「空会话」tab 一键扫出从没发过消息的会话（多帧 zstd 逐帧解码判定，损坏日志自动跳过） ✨
 - **多选批量删** — 设置页里逐条勾选，支持**全选 / 反选**，工具栏实时显示「已选 N 项 · 12.4 MB」 📦
 - **批量清空** — 「全部移入回收站 (N)」一键搞定，不用一个个勾
@@ -46,13 +47,13 @@ dsh plugin --profile web add dsh-archive-trash
 
 | 格式 | 链接 | 用途 |
 | --- | --- | --- |
-| `.tgz` | [dsh-archive-trash-0.5.1.tgz](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.5.1/dsh-archive-trash-0.5.1.tgz) | 给 `dsh plugin add` 吃 |
-| `.zip` | [dsh-archive-trash-0.5.1.zip](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.5.1/dsh-archive-trash-0.5.1.zip) | 手动解压丢进 `node_modules` |
+| `.tgz` | [dsh-archive-trash-0.6.0.tgz](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.0/dsh-archive-trash-0.6.0.tgz) | 给 `dsh plugin add` 吃 |
+| `.zip` | [dsh-archive-trash-0.6.0.zip](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.0/dsh-archive-trash-0.6.0.zip) | 手动解压丢进 `node_modules` |
 
 tgz 本地装：
 
 ```sh
-dsh plugin --profile web add ./dsh-archive-trash-0.5.1.tgz
+dsh plugin --profile web add ./dsh-archive-trash-0.6.0.tgz
 ```
 
 zip 手动装：解压出 `dsh-archive-trash/` 整块，粘进 profile 的 `node_modules/` 里，再在 profile 的 `cordis.yml` 里启用（zip 里多带了 `selftest.mjs`，装完可以自己跑一遍验证）：

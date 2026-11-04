@@ -89,6 +89,17 @@ window.__ModuleLoader__.load({
       emptySkipped: (n) => `${n} 个会话无法判定（日志损坏或过大），已跳过`,
       confirmEmpty: (n) => `把 ${n} 个空会话移进回收站？它们从没发过消息，之后仍可还原。`,
       emptyTag: '空',
+      tabStray: '游离',
+      strayHint:
+        '这些会话在磁盘上，但没有归属到任何工作区 —— 侧边栏里根本看不见它们。删掉不影响任何工作区。',
+      scanStray: '扫描游离 🔍',
+      strayNone: '没有游离会话 ✨',
+      strayNoneHint: '所有会话都有归属，干净。',
+      strayUnsupported: '拿不到工作区注册表，无法判断归属',
+      confirmStray: (n) => `把 ${n} 个游离会话移进回收站？它们没有工作区归属，之后仍可还原。`,
+      strayTag: '游离',
+      dialogN: (n) => `${n} 条对话`,
+      strayRejected: (n) => `${n} 个不是游离会话，已跳过`,
       selectAll: '全选',
       clearSel: '取消选择',
       invertSel: '反选',
@@ -148,6 +159,17 @@ window.__ModuleLoader__.load({
       emptySkipped: (n) => `${n} session(s) could not be judged (corrupt or too large) and were skipped`,
       confirmEmpty: (n) => `Move ${n} empty session(s) to trash? They never sent a message, and you can still restore them.`,
       emptyTag: 'empty',
+      tabStray: 'Stray',
+      strayHint:
+        'These sessions exist on disk but belong to no workspace — the sidebar never shows them. Deleting them affects no workspace.',
+      scanStray: 'Scan stray 🔍',
+      strayNone: 'No stray sessions ✨',
+      strayNoneHint: 'Every session has a home. All clean.',
+      strayUnsupported: 'Workspace registry unavailable — cannot determine ownership',
+      confirmStray: (n) => `Move ${n} stray session(s) to trash? They belong to no workspace, and you can still restore them.`,
+      strayTag: 'stray',
+      dialogN: (n) => `${n} turn(s)`,
+      strayRejected: (n) => `${n} not stray, skipped`,
       selectAll: 'Select all',
       clearSel: 'Clear',
       invertSel: 'Invert',
@@ -364,12 +386,15 @@ window.__ModuleLoader__.load({
     function ArchiveCleanerPanel() {
       const [tab, setTab] = useState('archived')
       const [scanning, setScanning] = useState(false)
+      const [scanningStray, setScanningStray] = useState(false)
       const [state, setState] = useState({
         status: 'loading',
         archived: [],
         trash: [],
         empty: [],
         emptySkipped: 0,
+        stray: [],
+        strayUnsupported: false,
         missingRegistry: false,
         error: null,
       })
@@ -390,6 +415,8 @@ window.__ModuleLoader__.load({
             trash: Array.isArray(data.trash) ? data.trash : [],
             empty: prev.empty,
             emptySkipped: prev.emptySkipped,
+            stray: prev.stray,
+            strayUnsupported: prev.strayUnsupported,
             missingRegistry: data.missingRegistry === true,
             error: null,
           }))
@@ -400,6 +427,8 @@ window.__ModuleLoader__.load({
             trash: [],
             empty: prev.empty,
             emptySkipped: prev.emptySkipped,
+            stray: prev.stray,
+            strayUnsupported: prev.strayUnsupported,
             missingRegistry: false,
             error: String(error?.message ?? error),
           }))
@@ -416,7 +445,13 @@ window.__ModuleLoader__.load({
       }, [tab])
 
       const rows =
-        tab === 'archived' ? state.archived : tab === 'trash' ? state.trash : state.empty
+        tab === 'archived'
+          ? state.archived
+          : tab === 'trash'
+            ? state.trash
+            : tab === 'empty'
+              ? state.empty
+              : state.stray
       // 归档和空会话用 sessionId；只有回收站条目用 entryId
       const keyOf = (row) => (tab === 'trash' ? row.entryId : row.sessionId)
 
@@ -493,6 +528,37 @@ window.__ModuleLoader__.load({
           return msg
         })
 
+      // 扫描游离会话（磁盘上有、但没有工作区归属的）
+      const doScanStray = useCallback(async () => {
+        setScanningStray(true)
+        try {
+          const data = await callApi('scanStray')
+          const items = Array.isArray(data.items) ? data.items : []
+          setState((prev) => ({
+            ...prev,
+            stray: items,
+            strayUnsupported: data.unsupported === true,
+          }))
+          setSelected(new Set())
+        } catch (error) {
+          setNotice({ kind: 'err', text: String(error?.message ?? error) })
+        } finally {
+          setScanningStray(false)
+        }
+      }, [])
+
+      const doDeleteStray = () =>
+        run(async () => {
+          const ids = [...selected]
+          const data = await callApi('deleteStray', { sessionIds: ids })
+          const failed = data.failed?.length ?? 0
+          const rejected = data.rejected?.length ?? 0
+          let msg = t('moved', data.moved?.length ?? 0)
+          if (failed) msg += t('failedN', failed)
+          if (rejected) msg += t('strayRejected', rejected)
+          return msg
+        })
+
       // 批量：一次把当前所有归档会话移入回收站（不需要逐个勾选）
       const doMoveAllToTrash = () =>
         run(async () => {
@@ -517,8 +583,10 @@ window.__ModuleLoader__.load({
         })
 
       const confirmText =
-        confirm === 'empty'
-          ? t('confirmEmpty', selected.size)
+        confirm === 'stray'
+          ? t('confirmStray', selected.size)
+          : confirm === 'empty'
+            ? t('confirmEmpty', selected.size)
           : confirm === 'trash'
             ? t('confirmTrash', selected.size)
           : confirm === 'restore'
@@ -531,6 +599,7 @@ window.__ModuleLoader__.load({
                   ? t('confirmPurgeAll', state.trash.length)
                   : ''
       const confirmDanger =
+        confirm === 'stray' ||
         confirm === 'empty' ||
         confirm === 'trash' ||
         confirm === 'trashAll' ||
@@ -538,7 +607,8 @@ window.__ModuleLoader__.load({
         confirm === 'purgeAll'
 
       const onConfirm = () => {
-        if (confirm === 'empty') void doDeleteEmpty()
+        if (confirm === 'stray') void doDeleteStray()
+        else if (confirm === 'empty') void doDeleteEmpty()
         else if (confirm === 'trash') void doMoveToTrash()
         else if (confirm === 'trashAll') void doMoveAllToTrash()
         else if (confirm === 'restore') void doRestore()
@@ -610,6 +680,20 @@ window.__ModuleLoader__.load({
               },
               `${t('tabEmpty')} (${state.empty.length})`,
             ),
+            h(
+              'button',
+              {
+                type: 'button',
+                role: 'tab',
+                className: 'ac-tab',
+                'aria-selected': String(tab === 'stray'),
+                onClick: () => {
+                  setTab('stray')
+                  if (state.stray.length === 0 && !scanningStray) void doScanStray()
+                },
+              },
+              `${t('tabStray')} (${state.stray.length})`,
+            ),
           ),
           h('span', { className: 'ac-spacer' }),
           rows.length > 0
@@ -633,16 +717,21 @@ window.__ModuleLoader__.load({
                 `${t('selectedN', selected.size)}${selectedBytes > 0 ? ` · ${formatBytes(selectedBytes)}` : ''}`,
               )
             : null,
-          tab === 'empty'
+          tab === 'empty' || tab === 'stray'
             ? h(
                 'button',
                 {
                   type: 'button',
                   className: 'ac-btn ghost',
-                  onClick: () => void doScanEmpty(),
-                  disabled: busy || scanning,
+                  onClick: () =>
+                    void (tab === 'empty' ? doScanEmpty() : doScanStray()),
+                  disabled: busy || scanning || scanningStray,
                 },
-                scanning ? t('scanning') : t('scanEmpty'),
+                scanning || scanningStray
+                  ? t('scanning')
+                  : tab === 'empty'
+                    ? t('scanEmpty')
+                    : t('scanStray'),
               )
             : h('button', { type: 'button', className: 'ac-btn ghost', onClick: () => void load(), disabled: busy || state.status === 'loading' }, t('refresh')),
         ),
@@ -660,7 +749,13 @@ window.__ModuleLoader__.load({
                 h(
                   'span',
                   { className: 'ac-empty-emoji' },
-                  tab === 'archived' ? '🗂️' : tab === 'trash' ? '🗑️' : '✨',
+                  tab === 'archived'
+                    ? '🗂️'
+                    : tab === 'trash'
+                      ? '🗑️'
+                      : tab === 'empty'
+                        ? '✨'
+                        : '🧭',
                 ),
                 h(
                   'span',
@@ -669,7 +764,11 @@ window.__ModuleLoader__.load({
                     ? t('emptyArchived')
                     : tab === 'trash'
                       ? t('emptyTrash')
-                      : t('emptyNone'),
+                      : tab === 'empty'
+                        ? t('emptyNone')
+                        : state.strayUnsupported
+                          ? t('strayUnsupported')
+                          : t('strayNone'),
                 ),
                 h(
                   'span',
@@ -678,7 +777,9 @@ window.__ModuleLoader__.load({
                     ? t('emptyArchivedHint')
                     : tab === 'trash'
                       ? t('emptyTrashHint')
-                      : t('emptyNoneHint'),
+                      : tab === 'empty'
+                        ? t('emptyNoneHint')
+                        : t('strayNoneHint'),
                 ),
               )
             : h(
@@ -718,6 +819,9 @@ window.__ModuleLoader__.load({
                         h('span', { className: 'ac-mono' }, key),
                         row.cwd ? h('span', { title: row.cwd }, shortCwd(row.cwd)) : null,
                         h('span', null, formatDate(when)),
+                        typeof row.dialogCount === 'number'
+                          ? h('span', null, t('dialogN', row.dialogCount))
+                          : null,
                         row.bytes
                           ? h('span', null, formatBytes(row.bytes))
                           : row.size
@@ -729,6 +833,7 @@ window.__ModuleLoader__.load({
                       ? h('span', { className: 'ac-tag warn' }, t('missing'))
                       : null,
                     tab === 'empty' ? h('span', { className: 'ac-tag' }, t('emptyTag')) : null,
+                    tab === 'stray' ? h('span', { className: 'ac-tag warn' }, t('strayTag')) : null,
                   )
                 }),
               ),
@@ -758,7 +863,7 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'ac-bar' },
-          tab === 'archived' || tab === 'empty'
+          tab === 'archived' || tab === 'empty' || tab === 'stray'
             ? h(
                 'button',
                 {
@@ -766,7 +871,10 @@ window.__ModuleLoader__.load({
                   className: 'ac-btn danger',
                   disabled: busy || selected.size === 0,
                   title: t('moveToTrashSelected'),
-                  onClick: () => setConfirm(tab === 'empty' ? 'empty' : 'trash'),
+                  onClick: () =>
+                    setConfirm(
+                      tab === 'empty' ? 'empty' : tab === 'stray' ? 'stray' : 'trash',
+                    ),
                 },
                 `${t('moveToTrash')} (${selected.size})`,
               )

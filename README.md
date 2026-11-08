@@ -47,13 +47,13 @@ dsh plugin --profile web add dsh-archive-trash
 
 | 格式 | 链接 | 用途 |
 | --- | --- | --- |
-| `.tgz` | [dsh-archive-trash-0.6.0.tgz](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.0/dsh-archive-trash-0.6.0.tgz) | 给 `dsh plugin add` 吃 |
-| `.zip` | [dsh-archive-trash-0.6.0.zip](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.0/dsh-archive-trash-0.6.0.zip) | 手动解压丢进 `node_modules` |
+| `.tgz` | [dsh-archive-trash-0.6.1.tgz](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.1/dsh-archive-trash-0.6.1.tgz) | 给 `dsh plugin add` 吃 |
+| `.zip` | [dsh-archive-trash-0.6.1.zip](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.1/dsh-archive-trash-0.6.1.zip) | 手动解压丢进 `node_modules` |
 
 tgz 本地装：
 
 ```sh
-dsh plugin --profile web add ./dsh-archive-trash-0.6.0.tgz
+dsh plugin --profile web add ./dsh-archive-trash-0.6.1.tgz
 ```
 
 zip 手动装：解压出 `dsh-archive-trash/` 整块，粘进 profile 的 `node_modules/` 里，再在 profile 的 `cordis.yml` 里启用（zip 里多带了 `selftest.mjs`，装完可以自己跑一遍验证）：

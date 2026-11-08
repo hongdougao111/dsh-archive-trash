@@ -17,7 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { scanEmptySessions, EMPTY_SIZE_LIMIT } from './empty-scan.js'
-import { scanStraySessions } from './stray-scan.js'
+import { scanStraySessions, decodeSessionLog } from './stray-scan.js'
 
 const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const SESSIONS_ROOT = path.join(DSH_HOME, 'sessions')
@@ -217,6 +217,34 @@ async function refreshSessionList(ctx) {
 }
 
 /**
+ * 从磁盘读一条会话的真实 header。
+ *
+ * 为什么不复用 meta.json：
+ *   meta 是我们自己写的，只有 sessionId / cwd / title / deletedAt。
+ *   subagent 会话还带着 parentSession 和 origin，这两样一丢，
+ *   前端恢复后拿到的会话没有父会话归属 —— 打开就是「会话不可用」。
+ *
+ * @returns {Promise<object|null>}
+ */
+async function readSessionHeader(dir) {
+  try {
+    const names = await fs.readdir(dir)
+    const candidate = names.find((n) => /^session\..+\.jsonl(\.zstd)?$/.test(n))
+    if (!candidate) return null
+    const buf = await fs.readFile(path.join(dir, candidate))
+    for (const line of decodeSessionLog(buf)) {
+      try {
+        const evt = JSON.parse(line)
+        if (evt && evt.type === 'session') return evt
+      } catch {}
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
  * 收集所有工作区记在册的 sessionId。
  *
  * DSH 的侧边栏按 Workspace 的 sessionIds 分组渲染。不在任何工作区里的会话
@@ -393,19 +421,24 @@ async function moveToTrash(ctx, sessionIds, opts = {}) {
  *
  * @param {Map<string, object>} headers sessionId → SessionHeader
  */
-async function announceRestored(ctx, headers) {
-  if (headers.size === 0) return
-  for (const [id, header] of headers) {
+async function announceRestored(ctx, entries) {
+  if (entries.size === 0) return
+  for (const [id, entry] of entries) {
+    const header = entry?.header ?? null
+    const cwd = header?.cwd ?? entry?.fallbackCwd
+    const createdAt = Number(header?.createdAt) || Number(entry?.fallbackCreatedAt) || Date.now()
     const summary = {
       sessionId: id,
-      updatedAt: Number(header?.createdAt) || Date.now(),
+      updatedAt: createdAt,
       agentAvailable: false,
       formatStatus: 'current',
       running: false,
       blank: false,
-      ...(header?.parentSession === undefined ? {} : { parentSessionId: header.parentSession }),
+      ...(header?.parentSession === undefined
+        ? {}
+        : { parentSessionId: header.parentSession }),
       ...(header?.origin === undefined ? {} : { origin: header.origin }),
-      ...(header?.cwd === undefined ? {} : { cwd: header.cwd }),
+      ...(cwd === undefined ? {} : { cwd }),
     }
     try {
       ctx.emit('api-session/added', summary)
@@ -441,10 +474,13 @@ async function restoreFromTrash(ctx, entryIds) {
       const sessionId = String(meta.sessionId ?? '')
       restored.push({ entryId, sessionId })
       if (sessionId) {
+        // 关键：从刚落盘的日志里读真实 header，不要拿 meta 拼。
+        // subagent 会话的 parentSession / origin 只有日志里有，丢了就会话不可用。
+        const realHeader = await readSessionHeader(originalPath)
         restoredHeaders.set(sessionId, {
-          id: sessionId,
-          cwd: meta.cwd || undefined,
-          createdAt: meta.deletedAt || Date.now(),
+          header: realHeader,
+          fallbackCwd: meta.cwd || undefined,
+          fallbackCreatedAt: meta.deletedAt || Date.now(),
         })
       }
     } catch (error) {

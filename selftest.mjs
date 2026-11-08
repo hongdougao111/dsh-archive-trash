@@ -537,6 +537,60 @@ console.log('21) scanStray —— 只扫没被工作区记账的会话')
   registry.list = () => []
 }
 
+console.log('22) restore —— subagent 会话还原后保留 parentSession / origin')
+{
+  // 造一个 subagent 会话：带 parentSession 和 origin: 'subagent'
+  const SUB = 'subagent-e0011111-2222-3333-4444-555566667777'
+  const PARENT = 'session-parent00-0000-0000-0000-000000000000'
+  const dir = await makeZstdSession(SUB, [
+    {
+      type: 'session',
+      version: 4,
+      id: SUB,
+      createdAt: Date.now() - 3600000,
+      cwd: 'E:/fake/workspace',
+      parentSession: PARENT,
+      origin: 'subagent',
+      isSeeded: false,
+      delegationDepth: 0,
+    },
+    { type: 'user/message', text: 'sub task' },
+    { type: 'assistant/message', text: 'done' },
+  ])
+
+  // 移进回收站
+  const r1 = await request('delete', { sessionIds: [SUB] })
+  check('subagent 移入回收站', r1.body.moved?.length === 1, r1.body)
+
+  const trash = (await request('list')).body.trash
+  const entry = trash.find((t) => t.sessionId === SUB)
+  check('回收站里有这条', entry !== undefined, trash.map((t) => t.sessionId))
+
+  // 还原
+  if (entry) {
+    const r2 = await request('restore', { entryIds: [entry.entryId] })
+    check('还原成功', r2.body.restored?.length === 1, r2.body)
+
+    // 还原后 emit 的 api-session/added 必须带 parentSessionId 和 origin
+    // emitted 的元素是 [event, ...args]，不是 { event, args }
+    const added = emitted.filter(
+      (e) => e[0] === 'api-session/added' && e[1]?.sessionId === SUB,
+    )
+    const last = added[added.length - 1]
+    const summary = last?.[1]
+    check('还原后发了 api-session/added', last !== undefined, emitted.map((e) => e[0]))
+    check('summary 带 parentSessionId', summary?.parentSessionId === PARENT, summary)
+    check('summary 带 origin=subagent', summary?.origin === 'subagent', summary)
+    check(
+      'summary 的 updatedAt 用真实 createdAt 而非 deletedAt',
+      summary?.updatedAt !== entry.deletedAt,
+      { updatedAt: summary?.updatedAt, deletedAt: entry.deletedAt },
+    )
+  }
+
+  await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
+}
+
 await fs.rm(TMP, { recursive: true, force: true })
 console.log('')
 console.log(failures === 0 ? '全部通过 ✓' : `${failures} 项失败 ✗`)

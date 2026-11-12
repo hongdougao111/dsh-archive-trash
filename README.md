@@ -47,13 +47,13 @@ dsh plugin --profile web add dsh-archive-trash
 
 | 格式 | 链接 | 用途 |
 | --- | --- | --- |
-| `.tgz` | [dsh-archive-trash-0.6.1.tgz](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.1/dsh-archive-trash-0.6.1.tgz) | 给 `dsh plugin add` 吃 |
-| `.zip` | [dsh-archive-trash-0.6.1.zip](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.1/dsh-archive-trash-0.6.1.zip) | 手动解压丢进 `node_modules` |
+| `.tgz` | [dsh-archive-trash-0.6.2.tgz](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.2/dsh-archive-trash-0.6.2.tgz) | 给 `dsh plugin add` 吃 |
+| `.zip` | [dsh-archive-trash-0.6.2.zip](https://github.com/hongdougao111/dsh-archive-trash/releases/download/v0.6.2/dsh-archive-trash-0.6.2.zip) | 手动解压丢进 `node_modules` |
 
 tgz 本地装：
 
 ```sh
-dsh plugin --profile web add ./dsh-archive-trash-0.6.1.tgz
+dsh plugin --profile web add ./dsh-archive-trash-0.6.2.tgz
 ```
 
 zip 手动装：解压出 `dsh-archive-trash/` 整块，粘进 profile 的 `node_modules/` 里，再在 profile 的 `cordis.yml` 里启用（zip 里多带了 `selftest.mjs`，装完可以自己跑一遍验证）：
@@ -164,7 +164,7 @@ Host  ctx.emit('api-session/added', summary)  → 前端 handleSessionAdded  →
 ## 兼容性 📋
 
 - 需要 DSH `0.2.x` 及以上（`settings.section` slot + `workspaceRegistry` 服务）
-- 已在 **DSH 0.2.1-rc.5** 实测通过
+- 已在 **DSH 0.2.2-rc.1** 实测通过（cordis 4.1.0）
 - `web` 与 `desktop` 两种 profile 都适用
 
 > 0.4.1 起对 DSH 0.2.1 做了适配：新版移除了 `sessions.refresh()` 和
